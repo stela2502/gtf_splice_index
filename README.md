@@ -12,7 +12,57 @@ and provide fast, deterministic transcript matching.
 
 Coordinates are **0-based, half-open**: `[start, end)`.
 
+
+## Installation
+
+You can add `gtf_splice_index` directly from GitHub.
+
+### Using `cargo add` (recommended)
+
+```bash
+cargo add gtf_splice_index --git https://github.com/stela2502/gtf_splice_index
+```
+
+This will add an entry like this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+gtf_splice_index = { git = "https://github.com/stela2502/gtf_splice_index" }
+```
+
 ---
+
+### Pin to a specific commit or branch (optional)
+
+For reproducibility, you may want to pin a commit or branch.
+
+**Specific commit:**
+
+```toml
+[dependencies]
+gtf_splice_index = { git = "https://github.com/stela2502/gtf_splice_index", rev = "COMMIT_HASH" }
+```
+
+**Specific branch:**
+
+```toml
+[dependencies]
+gtf_splice_index = { git = "https://github.com/stela2502/gtf_splice_index", branch = "main" }
+```
+
+---
+
+### Local development (path dependency)
+
+If you’re developing both crates together:
+
+```toml
+[dependencies]
+gtf_splice_index = { path = "../gtf_splice_index" }
+```
+
+---
+
 
 ## Main workflow
 
