@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::fmt;
 
 /// Internal numeric IDs (indexes into Vecs).
 pub type GeneId = usize;
@@ -32,6 +33,20 @@ pub enum MatchClass {
 }
 
 
+impl fmt::Display for MatchClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            MatchClass::Compatible => "Compatible",
+            MatchClass::ExactJunctionChain => "ExactJunctionChain",
+            MatchClass::Intronic => "Intronic",
+            MatchClass::JunctionMismatch => "JunctionMismatch",
+            MatchClass::OverhangTooLarge => "OverhangTooLarge",
+            MatchClass::NoOverlap => "NoOverlap",
+            MatchClass::StrandMismatch => "StrandMismatch",
+        };
+        write!(f, "{s}")
+    }
+}
 
 impl MatchClass {
     /// Numeric ranking used for comparisons.

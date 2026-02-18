@@ -276,7 +276,7 @@ impl SpliceIndex {
     /// `chr_names` (stable "first-seen" order).
     ///
     /// This avoids requiring an external chromosome ordering for the common case.
-        pub fn from_path<P: AsRef<Path>>(
+    pub fn from_path<P: AsRef<Path>>(
         path: P,
         bin_width: u32,
         keys: IdNameKeys,

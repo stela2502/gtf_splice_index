@@ -116,10 +116,10 @@ impl SplicedRead {
     /// Sort blocks by start and merge overlaps/adjacent.
     ///
     /// This makes matching stable and guards against messy upstream block creation.
-    pub fn finalize(&mut self) {
+    pub fn finalize(&mut self) -> (u32, u32){
         if self.blocks.is_empty() {
             self.finalized = true;
-            return;
+            return (0, 0);
         }
 
         self.blocks.sort_by_key(|b| (b.start, b.end));
@@ -140,6 +140,11 @@ impl SplicedRead {
 
         self.blocks = merged;
         self.finalized = true;
+
+        let start = self.blocks.first().unwrap().start;
+        let end = self.blocks.last().unwrap().end;
+
+        (start, end)
     }
 
     /// Panics if not finalized (development-time safety).
