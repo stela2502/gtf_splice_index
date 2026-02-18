@@ -1,8 +1,9 @@
 use crate::model::types::{MatchClass, MatchHit, MatchOptions, TranscriptId};
 use crate::types::{RefBlock, SplicedRead, Strand};
+use serde::{Serialize, Deserialize};
 
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transcript {
     pub id: TranscriptId,
     pub gene_id: usize,
@@ -70,11 +71,11 @@ impl Transcript {
         }
         out
     }
-
-    pub fn finalize(&mut self) {
+    /// sorts the transcripts exons and returns (total start: u32, total end: u32)
+    pub fn finalize(&mut self) -> (u32, u32) {
         if self.exons.is_empty() {
             self.finalized = true;
-            return;
+            return (0,0);
         }
 
         self.exons.sort_by_key(|b| (b.start, b.end));
@@ -94,6 +95,11 @@ impl Transcript {
 
         self.exons = merged;
         self.finalized = true;
+
+        let start = self.exons.first().unwrap().start;
+        let end = self.exons.last().unwrap().end;
+
+        (start, end)
     }
 
     pub fn span(&self) -> Option<(u32, u32)> {

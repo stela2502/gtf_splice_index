@@ -1,5 +1,7 @@
+use serde::{Serialize, Deserialize};
+
 /// Genomic strand/orientation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize )]
 pub enum Strand {
     Plus,
     Minus,
@@ -16,7 +18,7 @@ impl Strand {
 
 /// A contiguous genomic interval.
 /// Coordinates are 0-based, half-open: [start, end)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize )]
 pub struct RefBlock {
     pub start: u32,
     pub end: u32,

@@ -1,11 +1,12 @@
 use crate::model::types::{TranscriptId, GeneId};
+use serde::{Serialize, Deserialize};
 
 /// Gene model: stores one or more names/aliases and transcript ids.
 ///
 /// Notes:
 /// - `names[0]` is treated as the primary name (if present).
 /// - additional names are aliases (deduped).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Gene {
     pub id: GeneId,
     pub names: Vec<String>,

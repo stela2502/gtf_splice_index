@@ -1,11 +1,24 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::BufRead;
+use std::fmt;
 
 use crate::annotation::io::{AnnotationReader, AnnotationRecord, ParseError};
 use crate::model::gene::Gene;
 use crate::model::transcript::Transcript;
 use crate::model::types::{GeneId, MatchClass, MatchHit, MatchOptions, TranscriptId};
 use crate::types::{RefBlock, SplicedRead, Strand};
+
+// to serialize the data
+use serde::{Serialize, Deserialize};
+use anyhow::{bail, Context, Result};
+use std::path::Path;
+use std::fs::File;
+use std::io::{Read, BufReader, Write};
+use flate2::read::GzDecoder;
+
+
+const MAGIC: &[u8; 4] = b"SPX1";
+const VERSION_STR: &str = env!("CARGO_PKG_VERSION");
 
 /// Configure which attribute keys are used to extract:
 /// - gene stable identifier (used to intern -> GeneId)
@@ -51,7 +64,7 @@ impl Default for IdNameKeys {
 /// Per-chromosome bucket index: bin -> transcript ids.
 ///
 /// This is a pre-filter only: it returns candidate transcript IDs that overlap bins.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChrBuckets {
     pub bin_width: u32,
     pub bins: Vec<Vec<TranscriptId>>,
@@ -125,7 +138,7 @@ pub struct GeneMatch<'a> {
 /// - chromosome dictionary (chr name -> chr_id)
 /// - genes + transcripts
 /// - per-chromosome buckets for fast candidate lookup
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpliceIndex {
     pub bin_width: u32,
 
@@ -136,7 +149,111 @@ pub struct SpliceIndex {
     pub transcripts: Vec<Transcript>,
 
     pub chr_buckets: Vec<ChrBuckets>,
+
+    // Cached transcript spans, indexed by TranscriptId
+    pub tx_span_start: Vec<u32>,
+    pub tx_span_end: Vec<u32>,
 }
+
+
+/// Human-readable summary of the `SpliceIndex`.
+///
+/// The output is intended for quick inspection and debugging. It prints:
+///
+/// Global summary:
+/// - Total number of genes
+/// - Total number of transcripts
+/// - Number of chromosomes indexed
+/// - Global bin width in base pairs
+///
+/// Per-chromosome summary:
+/// - Number of bins
+/// - Number of unique genes represented on the chromosome
+/// - Number of unique transcripts represented on the chromosome
+/// - Mean number of genes per bin
+/// - Mean number of transcripts per bin
+///
+/// Notes:
+/// - Means are calculated over all bins, including empty ones.
+/// - Gene counts per bin are derived from the transcripts stored in each bin.
+/// - All statistics are computed on the fly during formatting and are not cached.
+///
+/// This implementation is meant for logging and diagnostics, not for
+/// high-performance or machine-readable output.
+impl fmt::Display for SpliceIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // ---- global summary ----
+        let n_genes = self.genes.len();
+        let n_txs   = self.transcripts.len();
+        let n_chrs  = self.chr_names.len();
+
+        writeln!(
+            f,
+            "SpliceIndex: {} genes, {} transcripts, {} chromosomes, bin_width={} bp",
+            n_genes, n_txs, n_chrs, self.bin_width
+        )?;
+
+        // ---- per-chromosome stats ----
+        for (i, chr_name) in self.chr_names.iter().enumerate() {
+            let Some(chr) = self.chr_buckets.get(i) else {
+                writeln!(f, "  - {}: <missing ChrBuckets>", chr_name)?;
+                continue;
+            };
+
+            let nbins = chr.bins.len();
+
+            let mut total_tx_hits: u64 = 0;
+            let mut total_gene_hits: u64 = 0;
+
+            let mut uniq_txs: HashSet<TranscriptId> = HashSet::new();
+            let mut uniq_genes: HashSet<GeneId> = HashSet::new();
+
+            for bin in chr.bins.iter() {
+                total_tx_hits += bin.len() as u64;
+
+                let mut bin_genes: HashSet<GeneId> = HashSet::new();
+
+                for &tx_id in bin.iter() {
+                    uniq_txs.insert(tx_id);
+
+                    // assumes Transcript has a gene_id field
+                    let gene_id = self.transcripts[tx_id].gene_id;
+                    uniq_genes.insert(gene_id);
+                    bin_genes.insert(gene_id);
+                }
+
+                total_gene_hits += bin_genes.len() as u64;
+            }
+
+            let mean_tx_per_bin = if nbins == 0 {
+                0.0
+            } else {
+                total_tx_hits as f64 / nbins as f64
+            };
+
+            let mean_genes_per_bin = if nbins == 0 {
+                0.0
+            } else {
+                total_gene_hits as f64 / nbins as f64
+            };
+
+            writeln!(
+                f,
+                "  - {}: bins={}, genes={}, transcripts={}, mean_genes/bin={:.3}, mean_tx/bin={:.3}",
+                chr_name,
+                nbins,
+                uniq_genes.len(),
+                uniq_txs.len(),
+                mean_genes_per_bin,
+                mean_tx_per_bin
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+
 
 impl SpliceIndex {
     pub fn new(bin_width: u32) -> Self {
@@ -147,7 +264,114 @@ impl SpliceIndex {
             genes: Vec::new(),
             transcripts: Vec::new(),
             chr_buckets: Vec::new(),
+            tx_span_start: Vec::new(),
+            tx_span_end: Vec::new(),
         }
+    }
+
+    /// Build a `SpliceIndex` from a GTF/GFF path.
+    ///
+    /// Chromosome order is derived from the annotation file itself:
+    /// the first time we see a chromosome name in column 1, we append it to
+    /// `chr_names` (stable "first-seen" order).
+    ///
+    /// This avoids requiring an external chromosome ordering for the common case.
+        pub fn from_path<P: AsRef<Path>>(
+        path: P,
+        bin_width: u32,
+        keys: IdNameKeys,
+    ) -> Result<Self> {
+        let path = path.as_ref();
+
+        let is_gz = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("gz"))
+            .unwrap_or(false);
+
+        // Helper: open as BufRead (plain or gz)
+        let open_bufread = || -> Result<Box<dyn BufRead>> {
+            let f = File::open(path)
+                .with_context(|| format!("open annotation file {}", path.display()))?;
+
+            if is_gz {
+                let gz = GzDecoder::new(f);
+                Ok(Box::new(BufReader::new(gz)))
+            } else {
+                Ok(Box::new(BufReader::new(f)))
+            }
+        };
+
+        // ----------------------------
+        // Pass 1: discover chr order (first-seen in file)
+        // ----------------------------
+        let mut reader = open_bufread()
+            .with_context(|| format!("prepare reader for {}", path.display()))?;
+
+        let mut chr_names: Vec<String> = Vec::new();
+        let mut chr_to_id: HashMap<String, usize> = HashMap::new();
+
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = reader
+                .read_line(&mut line)
+                .with_context(|| format!("read annotation {}", path.display()))?;
+            if n == 0 {
+                break;
+            }
+
+            let s = line.trim_end();
+            if s.is_empty() || s.starts_with('#') {
+                continue;
+            }
+
+            let chr = match s.split('\t').next() {
+                Some(c) if !c.is_empty() => c,
+                _ => continue,
+            };
+
+            if !chr_to_id.contains_key(chr) {
+                let id = chr_names.len();
+                chr_names.push(chr.to_string());
+                chr_to_id.insert(chr.to_string(), id);
+            }
+        }
+
+        // ----------------------------
+        // Init index with discovered order
+        // ----------------------------
+        let mut idx = SpliceIndex {
+            bin_width,
+
+            chr_names,
+            chr_to_id,
+
+            genes: Vec::new(),
+            transcripts: Vec::new(),
+
+            chr_buckets: Vec::new(),
+
+            tx_span_start: Vec::new(),
+            tx_span_end: Vec::new(),
+        };
+
+        idx.chr_buckets = (0..idx.chr_names.len())
+            .map(|_| ChrBuckets {
+                bin_width,
+                bins: Vec::new(),
+                max_end: 0,
+            })
+            .collect();
+
+        // ----------------------------
+        // Pass 2: actual parse/build using your existing from_reader
+        // ----------------------------
+        let reader = open_bufread()
+            .with_context(|| format!("re-open reader for {}", path.display()))?;
+
+        idx.from_reader(reader, keys)
+            .with_context(|| format!("build splice index from {}", path.display()))
     }
 
     /// Build an index directly from a GTF/GFF3 reader.
@@ -237,8 +461,14 @@ impl SpliceIndex {
         }
 
         // Finalize transcripts (sort/merge exons)
+
+        self.tx_span_start.reserve(self.transcripts.len());
+        self.tx_span_end.reserve(self.transcripts.len());
+
         for tx in &mut self.transcripts {
-            tx.finalize();
+            let (start, end) = tx.finalize();
+            self.tx_span_start.push(start);
+            self.tx_span_end.push(end);
         }
 
         // Link transcripts into genes
@@ -520,6 +750,63 @@ impl SpliceIndex {
         for cb in &mut self.chr_buckets {
             cb.finalize();
         }
+    }
+        /// Serialize this index with a small header (magic + crate version) and a bincode payload.
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        let mut f = File::create(path)?;
+
+        // magic
+        f.write_all(MAGIC)?;
+
+        // version string from Cargo.toml
+        let v = VERSION_STR.as_bytes();
+        let len = v.len() as u16;
+        f.write_all(&len.to_le_bytes())?;
+        f.write_all(v)?;
+
+        // payload
+        let payload = bincode::serialize(self)?;
+        f.write_all(&payload)?;
+
+        Ok(())
+    }
+
+    /// Load an index written by `save()`. Rejects wrong file types and version mismatches.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let mut f = File::open(path)?;
+
+        // check magic
+        let mut magic = [0u8; 4];
+        f.read_exact(&mut magic)?;
+        if &magic != MAGIC {
+            bail!("Not a SpliceIndex file (bad magic)");
+        }
+
+        // read version string
+        let mut len_buf = [0u8; 2];
+        f.read_exact(&mut len_buf)?;
+        let len = u16::from_le_bytes(len_buf) as usize;
+
+        let mut ver_buf = vec![0u8; len];
+        f.read_exact(&mut ver_buf)?;
+        let file_version = std::str::from_utf8(&ver_buf)?;
+
+        if file_version != VERSION_STR {
+            bail!(
+                "Index version mismatch: file={}, binary={}",
+                file_version,
+                VERSION_STR
+            );
+        }
+
+        // read payload
+        let mut payload = Vec::new();
+        f.read_to_end(&mut payload)?;
+        let idx: Self = bincode::deserialize(&payload)?;
+
+        Ok(idx)
     }
 }
 
