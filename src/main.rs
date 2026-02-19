@@ -49,37 +49,63 @@ struct BuildArgs {
     // -------------------------
 
     /// Attribute keys to use for gene ID (repeatable).
-    /// Typical GTF: gene_id
-    /// Common GFF3: gene_id, gene, ID (depending on source)
-    #[arg(long = "gene-id-key", value_name = "KEY", num_args = 1.., default_values_t = default_gene_id_keys())]
+    /// Default (GTF-safe): gene_id
+    #[arg(
+        long = "gene-id-key",
+        value_name = "KEY",
+        num_args = 1..,
+        default_values_t = vec!["gene_id".to_string()]
+    )]
     gene_id_keys: Vec<String>,
 
     /// Attribute keys to use for gene name (repeatable).
-    /// Typical GTF: gene_name
-    /// Common GFF3: Name
-    #[arg(long = "gene-name-key", value_name = "KEY", num_args = 1.., default_values_t = default_gene_name_keys())]
+    /// Default (GTF-safe): gene_name
+    #[arg(
+        long = "gene-name-key",
+        value_name = "KEY",
+        num_args = 1..,
+        default_values_t = vec!["gene_name".to_string()]
+    )]
     gene_name_keys: Vec<String>,
 
     /// Attribute keys to use for transcript ID (repeatable).
-    /// Typical GTF: transcript_id
-    /// Common GFF3: transcript_id, ID (depending on source)
-    #[arg(long = "transcript-id-key", value_name = "KEY", num_args = 1.., default_values_t = default_transcript_id_keys())]
+    /// Default (GTF-safe): transcript_id
+    #[arg(
+        long = "transcript-id-key",
+        value_name = "KEY",
+        num_args = 1..,
+        default_values_t = vec!["transcript_id".to_string()]
+    )]
     transcript_id_keys: Vec<String>,
 
     /// Attribute keys to use for transcript name (repeatable).
-    /// Typical GTF: transcript_name
-    /// Common GFF3: Name
-    #[arg(long = "transcript-name-key", value_name = "KEY", num_args = 1.., default_values_t = default_transcript_name_keys())]
+    /// Default (GTF-safe): transcript_name
+    #[arg(
+        long = "transcript-name-key",
+        value_name = "KEY",
+        num_args = 1..,
+        default_values_t = vec!["transcript_name".to_string()]
+    )]
     transcript_name_keys: Vec<String>,
 
     /// GFF3 exon->transcript linkage keys (repeatable).
-    /// Standard GFF3: Parent
-    #[arg(long = "parent-key", value_name = "KEY", num_args = 1.., default_values_t = default_parent_keys())]
+    /// Default: Parent
+    #[arg(
+        long = "parent-key",
+        value_name = "KEY",
+        num_args = 1..,
+        default_values_t = vec!["Parent".to_string()]
+    )]
     parent_keys: Vec<String>,
 
     /// Feature types that count as exon blocks (repeatable).
-    /// Typical: exon
-    #[arg(long = "exon-feature-type", value_name = "TYPE", num_args = 1.., default_values_t = default_exon_feature_types())]
+    /// Default: exon
+    #[arg(
+        long = "exon-feature-type",
+        value_name = "TYPE",
+        num_args = 1..,
+        default_values_t = vec!["exon".to_string()]
+    )]
     exon_feature_types: Vec<String>,
 }
 
@@ -116,49 +142,4 @@ fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-// -------------------------
-// Defaults (sane GTF/GFF3)
-// -------------------------
-
-fn default_gene_id_keys() -> Vec<String> {
-    vec![
-        "gene_id".into(), // GTF
-        "gene".into(),    // some GFF-ish producers
-        "ID".into(),      // GFF3 sometimes
-    ]
-}
-
-fn default_gene_name_keys() -> Vec<String> {
-    vec![
-        "gene_name".into(), // GTF
-        "Name".into(),      // GFF3
-    ]
-}
-
-fn default_transcript_id_keys() -> Vec<String> {
-    vec![
-        "transcript_id".into(), // GTF
-        "ID".into(),            // GFF3 sometimes
-    ]
-}
-
-fn default_transcript_name_keys() -> Vec<String> {
-    vec![
-        "transcript_name".into(), // GTF
-        "Name".into(),            // GFF3
-    ]
-}
-
-fn default_parent_keys() -> Vec<String> {
-    vec![
-        "Parent".into(), // GFF3 standard
-    ]
-}
-
-fn default_exon_feature_types() -> Vec<String> {
-    vec![
-        "exon".into(),
-    ]
 }

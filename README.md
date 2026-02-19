@@ -1,5 +1,9 @@
 # gtf_splice_index
 
+
+[![Rust](https://github.com/stela2502/gtf_splice_index/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/stela2502/gtf_splice_index/actions/workflows/rust.yml)
+
+
 A flexible, streaming **GTF/GFF3 parser** plus a **splice-aware transcript index**
 for fast matching of spliced reads against transcript models.
 

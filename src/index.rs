@@ -424,15 +424,30 @@ impl SpliceIndex {
 
             let chr_id = self.intern_chr(&rec.seqname);
 
-            // Gene stable key (for interning)
-            let gene_key = &rec.pick_first_attr( &keys.gene_id_keys)
-                .unwrap_or_else(|| "<NO_GENE_ID>".to_string());
+            let gene_key = rec.pick_first_attr(&keys.gene_id_keys).ok_or_else(|| {
+                ParseError::MalformedLine {
+                    line_no: Some(rec.line_no),
+                    expected: "gene_id attribute (configure via --gene-id-key)",
+                    problem: "missing required gene id attribute".to_string(),
+                    details: Some(format!("tried keys: {:?}", keys.gene_id_keys)),
+                    line_preview: rec.line_preview.clone(),
+                }
+            })?;
 
-            // Transcript stable key(s) (for interning):
-            // prefer transcript_id_keys, else use Parent keys (GFF3)
-            let tx_key_raw = &rec.pick_first_attr( &keys.transcript_id_keys)
-                .or_else(|| rec.pick_first_attr( &keys.parent_keys))
-                .unwrap_or_else(|| "<NO_TX_ID>".to_string());
+            let tx_key_raw = rec
+                .pick_first_attr(&keys.transcript_id_keys)
+                .or_else(|| rec.pick_first_attr(&keys.parent_keys))
+                .ok_or_else(|| {
+                    let mut tried = keys.transcript_id_keys.clone();
+                    tried.extend(keys.parent_keys.clone());
+                    ParseError::MalformedLine {
+                        line_no: Some(rec.line_no),
+                        expected: "transcript_id attribute (or Parent for GFF3; configure via --transcript-id-key / --parent-key)",
+                        problem: "missing required transcript id attribute".to_string(),
+                        details: Some(format!("tried keys: {:?}", tried)),
+                        line_preview: rec.line_preview.clone(),
+                    }
+                })?;
 
             // Parent can be comma-separated in GFF3; support multi-parent exons.
             let tx_keys: Vec<String> = split_gff3_parent_list(&tx_key_raw);
