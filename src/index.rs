@@ -193,6 +193,16 @@ impl fmt::Display for SpliceIndex {
             n_genes, n_txs, n_chrs, self.bin_width
         )?;
 
+        if let Some(g) = self.genes.get(0) {
+            writeln!(
+                f,
+                "Gene Names like: {}",
+                g.names.join(", ")
+            )?;
+        } else {
+            writeln!(f, "Gene Names like: No genes detected")?;
+        }
+
         // ---- per-chromosome stats ----
         for (i, chr_name) in self.chr_names.iter().enumerate() {
             let Some(chr) = self.chr_buckets.get(i) else {
