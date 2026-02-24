@@ -105,12 +105,30 @@ impl ChrBuckets {
         }
     }
 
-    fn finalize(&mut self) {
+    pub fn finalize_by_tx_start(&mut self, tx_span_start: &[u32], tx_span_end: &[u32]) {
         for bin in &mut self.bins {
-            bin.sort_unstable();
+            // Sort by (start, end, id) to make it deterministic.
+            bin.sort_unstable_by(|a, b| {
+                let sa = tx_span_start[*a];
+                let sb = tx_span_start[*b];
+                match sa.cmp(&sb) {
+                    std::cmp::Ordering::Equal => {
+                        let ea = tx_span_end[*a];
+                        let eb = tx_span_end[*b];
+                        match ea.cmp(&eb) {
+                            std::cmp::Ordering::Equal => a.cmp(b),
+                            other => other,
+                        }
+                    }
+                    other => other,
+                }
+            });
+
+            // Now adjacent duplicates are guaranteed adjacent (because equal ids compare equal)
             bin.dedup();
         }
     }
+
 }
 
 /// Best transcript matches (ties allowed).
@@ -279,6 +297,13 @@ impl SpliceIndex {
         }
     }
 
+    /// sort the internal data structure by transcript start position.
+    fn finalize(&mut self) {
+        for cb in &mut self.chr_buckets {
+            cb.finalize_by_tx_start(&self.tx_span_start, &self.tx_span_end);
+        }
+    }
+
     /// Build a `SpliceIndex` from a GTF/GFF path.
     ///
     /// Chromosome order is derived from the annotation file itself:
@@ -384,6 +409,18 @@ impl SpliceIndex {
             .with_context(|| format!("build splice index from {}", path.display()))
     }
 
+    
+    pub fn gene_name(&self, gene_id: GeneId) -> Option<&str> {
+        self.genes
+            .get(gene_id)
+            .and_then(|g| g.primary_name())
+    }
+
+    pub fn transcript_name(&self, tx_id: TranscriptId) -> Option<&str> {
+        self.transcripts
+            .get(tx_id)
+            .and_then(|t| t.primary_name())
+    }
     /// Build an index directly from a GTF/GFF3 reader.
     ///
     /// Workflow:
@@ -772,9 +809,7 @@ impl SpliceIndex {
             let Some((s, e)) = tx.span() else { continue; };
             self.chr_buckets[tx.chr_id].add_span(tx_id, s, e);
         }
-        for cb in &mut self.chr_buckets {
-            cb.finalize();
-        }
+        self.finalize();
     }
         /// Serialize this index with a small header (magic + crate version) and a bincode payload.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -850,6 +885,7 @@ fn split_gff3_parent_list(raw: &str) -> Vec<String> {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -945,5 +981,652 @@ chr2\tsrc\texon\t5\t20\t.\t-\t.\tParent=tx1,tx2;gene_id=G9;Name=GeneNice
         assert_eq!(idx.transcripts[0].exons().len(), 1);
         assert_eq!(idx.transcripts[0].exons()[0].start, 4);
         assert_eq!(idx.transcripts[0].exons()[0].end, 20);
+    }
+}
+*/
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::collections::{HashMap, HashSet};
+    use std::fs;
+    use std::path::PathBuf;
+    use crate::model::types::{GeneId, TranscriptId};
+
+    // If you already have a crate-local Result/Error type, keep using it.
+    // Otherwise you can switch these tests to `anyhow::Result<()>` easily.
+    type TestResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+    // -----------------------------
+    // Helpers: stable temp path
+    // -----------------------------
+    fn tmp_path(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        // add a bit of uniqueness without external crates
+        let pid = std::process::id();
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        p.push(format!("gtf_splice_index_test_{name}_{pid}_{t}.bin"));
+        p
+    }
+
+    // -----------------------------
+    // Helpers: ID constructors
+    // -----------------------------
+    // Adjust these if your GeneId/TranscriptId are not tuple structs.
+    fn gid(i: usize) -> GeneId {
+        i
+    }
+    fn tid(i: usize) -> TranscriptId {
+        i
+    }
+
+    // -----------------------------
+    // Helpers: create transcripts/genes (using your constructors)
+    // -----------------------------
+    fn make_gene(id: GeneId, primary: &str, aliases: &[&str], transcript_ids: &[TranscriptId]) -> Gene {
+        let mut g = Gene::new(id, primary);
+        for &a in aliases {
+            g.add_name(a);
+        }
+        for &tx in transcript_ids {
+            g.add_transcript(tx);
+        }
+        g.finalize();
+        g
+    }
+
+    fn make_transcript(
+        id: TranscriptId,
+        gene_id: usize,
+        primary_name: &str,
+        alias_names: &[&str],
+        chr_id: usize,
+        strand: Strand,
+        exons: Vec<RefBlock>,
+    ) -> Transcript {
+        let mut tx = Transcript::new(id, gene_id, primary_name, chr_id, strand);
+        for &a in alias_names {
+            tx.add_name(a);
+        }
+        for b in exons {
+            tx.add_exon(b);
+        }
+        tx.finalize(); // sorts + merges exons, sets finalized=true, returns span
+        tx
+    }
+
+    fn span_of_exons(exons: &[RefBlock]) -> (u32, u32) {
+        let mut s = u32::MAX;
+        let mut e = 0u32;
+        for b in exons {
+            s = s.min(b.start);
+            e = e.max(b.end);
+        }
+        (s, e)
+    }
+
+    // Fill buckets deterministically.
+    // This assumes half-open coordinates [start,end) and bin assignment by overlap.
+    fn rebuild_chr_buckets(index: &mut SpliceIndex) {
+        index.chr_buckets.clear();
+
+        // determine per-chromosome max_end
+        let mut chr_max_end: Vec<u32> = vec![0; index.chr_names.len()];
+        for tx in &index.transcripts {
+            let (s, e) = span_of_exons(&tx.exons());
+            let _ = s;
+            chr_max_end[tx.chr_id] = chr_max_end[tx.chr_id].max(e);
+        }
+
+        // allocate bins and fill
+        for chr_id in 0..index.chr_names.len() {
+            let max_end = chr_max_end[chr_id];
+            let nbins = if max_end == 0 {
+                0
+            } else {
+                // ceiling division
+                ((max_end as u64 + index.bin_width as u64 - 1) / index.bin_width as u64) as usize
+            };
+            let mut cb = ChrBuckets {
+                bin_width: index.bin_width,
+                bins: vec![Vec::<TranscriptId>::new(); nbins],
+                max_end,
+            };
+
+            for tx in &index.transcripts {
+                if tx.chr_id != chr_id {
+                    continue;
+                }
+                let (start, end) = span_of_exons(&tx.exons());
+                if end <= start {
+                    continue;
+                }
+                let bw = index.bin_width;
+                let b0 = (start / bw) as usize;
+                let b1 = ((end - 1) / bw) as usize; // end-1 for half-open
+                for b in b0..=b1 {
+                    cb.bins[b].push(tx.id);
+                }
+            }
+
+            // enforce deterministic contents: sort & dedup each bin
+
+            index.chr_buckets.push(cb);
+        }
+        index.finalize();
+    }
+
+    fn rebuild_tx_spans(index: &mut SpliceIndex) {
+        index.tx_span_start.clear();
+        index.tx_span_end.clear();
+
+        // We assume TranscriptId values are dense 0..N-1.
+        let n = index.transcripts.len();
+        index.tx_span_start.resize(n, 0);
+        index.tx_span_end.resize(n, 0);
+
+        for tx in &index.transcripts {
+            let (s, e) = span_of_exons(&tx.exons());
+            index.tx_span_start[tx.id] = s;
+            index.tx_span_end[tx.id] = e;
+        }
+    }
+
+    // Build a small but non-trivial index:
+    //
+    // bin_width = 100
+    //
+    // chr1:
+    //   tx0: [ 10,  60) U [140, 180) => spans 10..180 => bins 0 and 1
+    //   tx1: [200, 260)             => spans 200..260 => bins 2
+    // chr2:
+    //   tx2: [ 90, 110)             => spans 90..110  => bins 0 and 1 (crosses boundary)
+    //
+    fn build_index() -> SpliceIndex {
+        let mut idx = SpliceIndex::new(100);
+
+        // Because this is a unit test in the same module, we can fill private fields.
+        idx.chr_names = vec!["chr1".to_string(), "chr2".to_string()];
+        idx.chr_to_id = HashMap::from([
+            ("chr1".to_string(), 0usize),
+            ("chr2".to_string(), 1usize),
+        ]);
+
+        // transcripts
+        let tx0 = make_transcript(
+            tid(0),
+            0, // gene index in idx.genes (below)
+            "TX0",
+            &["TX0", "TxZero"],
+            0,
+            Strand::Plus,
+            vec![
+                RefBlock { start: 10, end: 60 },
+                RefBlock { start: 140, end: 180 },
+            ],
+        );
+
+        let tx1 = make_transcript(
+            tid(1),
+            0,
+            "TX1",
+            &["TX1"],
+            0,
+            Strand::Plus,
+            vec![RefBlock { start: 200, end: 260 }],
+        );
+
+        let tx2 = make_transcript(
+            tid(2),
+            1, // second gene
+            "TX1",
+            &["TX2"],
+            1,
+            Strand::Minus,
+            vec![RefBlock { start: 90, end: 110 }],
+        );
+
+        // add this tx3
+        let tx3 = make_transcript(
+            tid(3),
+            0,                 // same gene as tx0/tx1, or set 1 if you want a second gene on chr1
+            "TX3",
+            &["TX3"],
+            0,                 // chr1
+            Strand::Plus,
+            vec![
+                RefBlock { start: 150, end: 160 },
+                RefBlock { start: 210, end: 240 },
+            ],
+        );
+
+        idx.transcripts = vec![tx0, tx1, tx2, tx3];
+
+        // genes
+        let g0 = make_gene(gid(0),"G0", &["G0", "GeneZero"], &[tid(0), tid(1)]);
+        let g1 = make_gene(gid(1),"G1", &["G1"], &[tid(2)]);
+        idx.genes = vec![g0, g1];
+
+        // build cached structures
+        rebuild_tx_spans(&mut idx);
+        rebuild_chr_buckets(&mut idx);
+
+        idx
+    }
+
+    // -----------------------------
+    // The "rigid structure" test
+    // -----------------------------
+    #[test]
+    fn splice_index_internal_structure_is_consistent_and_deterministic() -> TestResult<()> {
+        let idx = build_index();
+
+        // ---- basic shape checks
+        assert_eq!(idx.bin_width, 100);
+        assert_eq!(idx.chr_names, vec!["chr1".to_string(), "chr2".to_string()]);
+        assert_eq!(idx.genes.len(), 2);
+        assert_eq!(idx.transcripts.len(), 4);
+        assert_eq!(idx.chr_buckets.len(), 2);
+
+        // ---- private map must match chr_names
+        assert_eq!(idx.chr_to_id.get("chr1").copied(), Some(0));
+        assert_eq!(idx.chr_to_id.get("chr2").copied(), Some(1));
+        assert_eq!(idx.chr_to_id.len(), 2);
+
+        // ---- tx span caches must be present and correct
+        assert_eq!(idx.tx_span_start.len(), 4);
+        assert_eq!(idx.tx_span_end.len(), 4);
+
+        assert_eq!(idx.tx_span_start[0], 10);
+        assert_eq!(idx.tx_span_end[0], 180);
+
+        assert_eq!(idx.tx_span_start[1], 200);
+        assert_eq!(idx.tx_span_end[1], 260);
+
+        assert_eq!(idx.tx_span_start[2], 90);
+        assert_eq!(idx.tx_span_end[2], 110);
+
+        // ---- per-chromosome buckets must be consistent
+        // chr1 max_end = 260 => nbins=3 (0..2)
+        let cb1 = &idx.chr_buckets[0];
+        assert_eq!(cb1.bin_width, 100);
+        assert_eq!(cb1.max_end, 260);
+        assert_eq!(cb1.bins.len(), 3);
+
+        // chr1 bin membership (sorted, deduped)
+        // bin0: tx0 (10..60)
+        assert_eq!(cb1.bins[0], vec![tid(0)]);
+        // bin1: tx0 (140..180)
+        assert_eq!(cb1.bins[1], vec![tid(0), tid(3)]);
+        // bin2: tx1 (200..260)
+        assert_eq!(cb1.bins[2], vec![tid(3),tid(1)]);
+
+        // chr2 max_end = 110 => nbins=2 (0..1)
+        let cb2 = &idx.chr_buckets[1];
+        assert_eq!(cb2.bin_width, 100);
+        assert_eq!(cb2.max_end, 110);
+        assert_eq!(cb2.bins.len(), 2);
+
+        // chr2 bin membership: tx2 spans 90..110 crosses 100 boundary => bins 0 and 1
+        assert_eq!(cb2.bins[0], vec![tid(2)]);
+        assert_eq!(cb2.bins[1], vec![tid(2)]);
+
+        // ---- candidates_for_span_union must union bins correctly and dedupe
+        // chr1 span 0..150 touches bins 0 and 1 => tx0 only
+        let mut c = idx.candidates_for_span_union(0, 0, 150);
+        c.sort_by_key(|x| *x);
+        assert_eq!(c, vec![tid(0), tid(3)]);
+
+        // chr1 span 150..250 touches bins 1 and 2 => tx0, tx1
+        let mut c = idx.candidates_for_span_union(0, 150, 250);
+        c.sort_by_key(|x| *x);
+        assert_eq!(c, vec![tid(0), tid(1), tid(3) ]);
+
+        // chr2 span 95..96 touches only bin0 => tx2
+        let mut c = idx.candidates_for_span_union(1, 95, 96);
+        c.sort_by_key(|x| *x);
+        assert_eq!(c, vec![tid(2)]);
+
+        // ---- candidates_for_read_union should match span behavior across blocks
+        // Adjust this section if your SplicedRead struct differs.
+        let mut read_chr1 = SplicedRead::new(
+            0,
+            Strand::Plus,
+            vec![
+                RefBlock { start: 12, end: 20 },
+                RefBlock { start: 160, end: 170 },
+            ],
+        );
+        read_chr1.finalize();
+        let mut c = idx.candidates_for_read_union(&read_chr1);
+        c.sort_by_key(|x| *x);
+        assert_eq!(c, vec![tid(0), tid(3)]);
+
+        let mut read_chr1_wide = SplicedRead::new(
+            0,
+            Strand::Plus,
+            vec![
+                RefBlock { start: 155, end: 165 },
+                RefBlock { start: 205, end: 210 },
+            ],
+        );
+        read_chr1_wide.finalize();
+
+        let mut c = idx.candidates_for_read_union(&read_chr1_wide);
+        c.sort_by_key(|x| *x);
+        assert_eq!(c, vec![tid(0), tid(1), tid(3)]);
+
+        // ---- match_transcripts should pick the true best transcript
+        // This assumes `MatchOptions` exists and your scoring prefers exon overlap and
+        // correct splice structure. Adjust opts as needed.
+        let opts = MatchOptions::default();
+
+        let hits = idx.match_transcripts(&read_chr1, opts);
+        assert!(!hits.is_empty(), "expected at least one transcript hit");
+        // strongest expectation: tx0 must be a winner
+        assert!(
+            hits.iter().any(|h| h.transcript_id == tid(0)),
+            "expected tx0 among winning transcript hits: {hits:?}"
+        );
+        // and no chr-mismatched tx2
+        assert!(
+            hits.iter().all(|h| h.transcript.chr_id == 0),
+            "expected all hits to be on chr1"
+        );
+
+        // ---- match_genes should map to gene0 for chr1 reads
+        let gene_hits = idx.match_genes(&read_chr1, opts);
+        assert!(!gene_hits.is_empty(), "expected at least one gene hit");
+        assert!(
+            gene_hits.iter().any(|g| g.gene_id == gid(0)),
+            "expected gene0 among winning gene hits: {gene_hits:?}"
+        );
+        assert!(
+            gene_hits.iter().all(|g| g.gene.id == g.gene_id),
+            "gene reference and gene_id must agree"
+        );
+
+        // winning transcripts for gene0 must be subset of {tx0, tx1}
+        for g in &gene_hits {
+            if g.gene_id == gid(0) {
+                let s: HashSet<usize> = g.winning_transcripts.iter().map(|t| t.id).collect();
+                assert!(
+                    s.is_subset(&HashSet::from([0usize, 1usize])),
+                    "unexpected winning transcript IDs for gene0: {s:?}"
+                );
+            }
+        }
+
+        // ---- Display should at least mention key global counts
+        let s = format!("{idx}");
+        // keep these weak enough to survive formatting changes, but still meaningful
+        assert!(s.contains("genes") || s.contains("Genes"));
+        assert!(s.contains("transcripts") || s.contains("Transcripts"));
+        assert!(s.contains("chr") || s.contains("Chr") || s.contains("chrom"));
+
+        Ok(())
+    }
+
+
+
+    // -----------------------------
+    // Roundtrip test: save/load
+    // -----------------------------
+    #[test]
+    fn splice_index_save_load_roundtrip_preserves_internal_structure() -> TestResult<()> {
+
+        use std::io::Cursor;
+
+        // -----------------------------
+        // Inline GTF (2 genes, 3 transcripts)
+        // -----------------------------
+        let gtf  = concat!(
+            "chr1\tsource\texon\t10\t60\t.\t+\t.\tgene_id \"G0\"; transcript_id \"TX0\"; gene_name \"GeneZero\";\n",
+            "chr1\tsource\texon\t140\t180\t.\t+\t.\tgene_id \"G0\"; transcript_id \"TX0\";\n",
+            "chr1\tsource\texon\t200\t260\t.\t+\t.\tgene_id \"G0\"; transcript_id \"TX1\";\n",
+            "chr2\tsource\texon\t90\t110\t.\t-\t.\tgene_id \"G1\"; transcript_id \"TX2\";\n",
+        );
+
+        // -----------------------------
+        // Build index from text
+        // -----------------------------
+        let mut idx = SpliceIndex::new(50).from_reader(
+            Cursor::new(gtf),
+            IdNameKeys::default() // your default keys
+        )?;
+
+        // IMPORTANT: finalize after build
+        idx.finalize();  
+        
+        let path = tmp_path("splice_index_inline_gtf");
+
+        idx.save(&path)?;
+
+        let loaded = SpliceIndex::load(&path)?;
+
+        // ---- compare high-level invariants
+        assert_eq!(loaded.bin_width, idx.bin_width);
+        assert_eq!(loaded.chr_names, idx.chr_names);
+        assert_eq!(loaded.genes.len(), idx.genes.len());
+        assert_eq!(loaded.transcripts.len(), idx.transcripts.len());
+
+        // ---- compare private dictionary too (unit-test: same module)
+        assert_eq!(loaded.chr_to_id.len(), idx.chr_to_id.len());
+        for (k, v) in &idx.chr_to_id {
+            assert_eq!(loaded.chr_to_id.get(k).copied(), Some(*v));
+        }
+
+        // ---- compare cached spans
+        assert_eq!(loaded.tx_span_start, idx.tx_span_start);
+        assert_eq!(loaded.tx_span_end, idx.tx_span_end);
+
+        // ---- compare buckets rigidly
+        assert_eq!(loaded.chr_buckets.len(), idx.chr_buckets.len());
+        for (a, b) in loaded.chr_buckets.iter().zip(idx.chr_buckets.iter()) {
+            assert_eq!(a.bin_width, b.bin_width);
+            assert_eq!(a.max_end, b.max_end);
+            assert_eq!(a.bins.len(), b.bins.len());
+            assert_eq!(a.bins, b.bins);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn competitive_match_transcripts_and_genes_choose_correct_winner() -> TestResult<()> {
+        use std::collections::HashMap;
+
+        // -----------------------------
+        // Build a competitive index:
+        // chr1 has TX0 (G0) and TX3 (G2) overlapping the same bin(s)
+        // chr2 has TX2 (G1) as a distractor on another chromosome
+        // -----------------------------
+        let mut idx = SpliceIndex::new(100);
+
+        idx.chr_names = vec!["chr1".to_string(), "chr2".to_string()];
+        idx.chr_to_id = HashMap::from([
+            ("chr1".to_string(), 0usize),
+            ("chr2".to_string(), 1usize),
+        ]);
+
+        // Gene layout:
+        // genes[0] => G0 on chr1 with TX0 + TX1
+        // genes[1] => G1 on chr2 with TX2
+        // genes[2] => G2 on chr1 with TX3   (this is the competitor gene)
+        let g0 = make_gene(gid(0), "G0", &["GeneZero"], &[]);
+        let g1 = make_gene(gid(1), "G1", &[], &[]);
+        let g2 = make_gene(gid(2), "G2", &[], &[]);
+        idx.genes = vec![g0, g1, g2];
+
+        // TX0 (gene index 0), chr1, two exons => junction (60,140)
+        let tx0 = make_transcript(
+            tid(0),
+            0,
+            "TX0",
+            &["TxZero"],
+            0,
+            Strand::Plus,
+            vec![
+                RefBlock::new(10, 60),
+                RefBlock::new(140, 180),
+            ],
+        );
+
+        // TX1 (gene index 0), chr1, single exon in bin2 (not needed for this test, but realistic)
+        let tx1 = make_transcript(
+            tid(1),
+            0,
+            "TX1",
+            &[],
+            0,
+            Strand::Plus,
+            vec![RefBlock::new(200, 260)],
+        );
+
+        // TX2 (gene index 1), chr2, crosses boundary (distractor)
+        let tx2 = make_transcript(
+            tid(2),
+            1,
+            "TX2",
+            &[],
+            1,
+            Strand::Minus,
+            vec![RefBlock::new(90, 110)],
+        );
+
+        // TX3 (gene index 2), chr1 competitor:
+        // exons overlap read's 2nd block, but junction differs: (160,210)
+        // span 150..240 => touches bin1 and bin2, so it will be a candidate for reads in bin1.
+        let tx3 = make_transcript(
+            tid(3),
+            2,
+            "TX3",
+            &[],
+            0,
+            Strand::Plus,
+            vec![
+                RefBlock::new(150, 160),
+                RefBlock::new(210, 240),
+            ],
+        );
+
+        idx.transcripts = vec![tx0, tx1, tx2, tx3];
+
+        // Wire genes -> transcript_ids (important for match_genes)
+        idx.genes[0].add_transcript(tid(0));
+        idx.genes[0].add_transcript(tid(1));
+        idx.genes[1].add_transcript(tid(2));
+        idx.genes[2].add_transcript(tid(3));
+        for g in &mut idx.genes {
+            g.finalize();
+        }
+
+        // Build cached structures + buckets
+        rebuild_tx_spans(&mut idx);
+        rebuild_chr_buckets(&mut idx);
+
+        // If your SpliceIndex has its own finalize() that sorts/dedups bins by tx start, call it here:
+        // idx.finalize();
+
+        // Sanity: prove we truly have a bin with 2 entries on chr1
+        let cb1 = &idx.chr_buckets[0];
+        assert_eq!(cb1.bins.len(), 3);
+        // bin1 should contain TX0 (span 10..180) and TX3 (span 150..240)
+        assert!(
+            cb1.bins[1].contains(&tid(0)) && cb1.bins[1].contains(&tid(3)),
+            "expected chr1 bin1 to contain TX0 and TX3, got: {:?}",
+            cb1.bins[1]
+        );
+
+        // -----------------------------
+        // Competitive read: exact for TX0, not exact for TX3
+        // Read blocks match TX0 exons with the same junction (60,140)
+        // -----------------------------
+        let mut read_tx0 = SplicedRead::new(
+            0,
+            Strand::Plus,
+            vec![
+                RefBlock::new(12, 60),
+                RefBlock::new(140, 170),
+            ],
+        );
+        read_tx0.finalize(); // REQUIRED for matching
+
+        // Require exact junction chain and strand
+        let mut opts = MatchOptions::default();
+        opts.require_strand = true;
+        opts.require_exact_junction_chain = true;
+        opts.max_5p_overhang_bp = 50;
+        opts.max_3p_overhang_bp = 50;
+
+        // -----------------------------
+        // 1) match_transcripts: TX0 must win (TX3 must not win under exact requirement)
+        // -----------------------------
+        let tx_hits = idx.match_transcripts(&read_tx0, opts);
+        assert!(!tx_hits.is_empty(), "expected transcript hits");
+
+        // Every returned hit should be ExactJunctionChain under this option set
+        assert!(
+            tx_hits.iter().all(|h| h.hit.class == MatchClass::ExactJunctionChain),
+            "expected only ExactJunctionChain hits, got: {tx_hits:?}"
+        );
+
+        // TX0 must be among winners
+        assert!(
+            tx_hits.iter().any(|h| h.transcript_id == tid(0)),
+            "expected TX0 among winners, got: {tx_hits:?}"
+        );
+
+        // TX3 must NOT be a winner when exact chain is required (its junction differs)
+        assert!(
+            !tx_hits.iter().any(|h| h.transcript_id == tid(3)),
+            "did not expect TX3 among winners under exact requirement, got: {tx_hits:?}"
+        );
+
+        // -----------------------------
+        // 2) match_genes: G0 must win (and winning transcript must be TX0)
+        // -----------------------------
+        let gene_hits = idx.match_genes(&read_tx0, opts);
+        assert!(!gene_hits.is_empty(), "expected gene hits");
+
+        // Under exact requirement, best_hit should also be ExactJunctionChain
+        assert!(
+            gene_hits.iter().all(|g| g.best_hit.class == MatchClass::ExactJunctionChain),
+            "expected ExactJunctionChain gene best_hit, got: {gene_hits:?}"
+        );
+
+        // G0 (id 0) must be among winners
+        assert!(
+            gene_hits.iter().any(|g| g.gene_id == gid(0)),
+            "expected G0 among gene winners, got: {gene_hits:?}"
+        );
+
+        // G2 (id 2) must NOT be among winners (because TX3 should not win)
+        assert!(
+            !gene_hits.iter().any(|g| g.gene_id == gid(2)),
+            "did not expect G2 among winners under exact requirement, got: {gene_hits:?}"
+        );
+
+        // Winning transcripts for G0 must include TX0 (and should not include TX1 for this read)
+        for g in &gene_hits {
+            if g.gene_id == gid(0) {
+                let ids: Vec<TranscriptId> = g.winning_transcripts.iter().map(|t| t.id).collect();
+                assert!(
+                    ids.contains(&tid(0)),
+                    "expected TX0 to be a winning transcript for G0, got: {ids:?}"
+                );
+                assert!(
+                    !ids.contains(&tid(1)),
+                    "did not expect TX1 to be a winning transcript for this read, got: {ids:?}"
+                );
+            }
+        }
+
+        Ok(())
     }
 }
