@@ -304,6 +304,22 @@ impl SpliceIndex {
         }
     }
 
+    /// get all gene names from the index (id == gene_id)
+    pub fn gene_names(&self) -> Vec<String> {
+        self.genes
+            .iter()
+            .map(|g| g.primary_name().unwrap_or("NA").to_string())
+            .collect()
+    }
+
+    /// get all transcript names from the index (id == transcript_id)
+    pub fn transcript_names(&self) -> Vec<String> {
+        self.transcripts
+            .iter()
+            .map(|t| t.primary_name().unwrap_or("NA").to_string())
+            .collect()
+    }
+
     /// Build a `SpliceIndex` from a GTF/GFF path.
     ///
     /// Chromosome order is derived from the annotation file itself:
