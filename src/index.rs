@@ -105,6 +105,7 @@ impl ChrBuckets {
         }
     }
 
+
     fn finalize(&mut self) {
         for bin in &mut self.bins {
             bin.sort_unstable();
@@ -513,30 +514,78 @@ impl SpliceIndex {
     /// Candidate transcripts for a span using bucket prefilter (union across bins).
     ///
     /// Returns a deduped Vec of TranscriptIds.
-    pub fn candidates_for_span_union(&self, chr_id: usize, start0: u32, end0: u32) -> Vec<TranscriptId> {
+    pub fn candidates_for_span_union(
+        &self,
+        chr_id: usize,
+        start0: u32,
+        end0: u32,
+    ) -> Vec<TranscriptId> {
         if chr_id >= self.chr_buckets.len() {
             return Vec::new();
         }
-        let cb = &self.chr_buckets[chr_id];
-        if cb.bins.is_empty() || end0 <= start0 {
+
+        let chr_bins = &self.chr_buckets[chr_id];
+
+        if chr_bins.bins.is_empty() || end0 <= start0 {
             return Vec::new();
         }
 
-        let b0 = (start0 / cb.bin_width) as usize;
-        let b1 = ((end0.saturating_sub(1)) / cb.bin_width) as usize;
-
-        if b0 >= cb.bins.len() {
+        let first_bin = (start0 / chr_bins.bin_width) as usize;
+        if first_bin >= chr_bins.bins.len() {
             return Vec::new();
         }
-        let b1 = b1.min(cb.bins.len() - 1);
 
-        let mut out: Vec<TranscriptId> = Vec::new();
-        for b in b0..=b1 {
-            out.extend_from_slice(&cb.bins[b]);
+        let last_bin = ((end0.saturating_sub(1)) / chr_bins.bin_width) as usize;
+        let last_bin = last_bin.min(chr_bins.bins.len() - 1);
+
+        let mut candidates: HashSet<TranscriptId> = HashSet::new();
+
+        for bin_idx in first_bin..=last_bin {
+            let transcripts_in_bin = &chr_bins.bins[bin_idx];
+            if transcripts_in_bin.is_empty() {
+                continue;
+            }
+
+            // Binary search:
+            // find first transcript where start >= end0
+            let cutoff = Self::partition_point(
+                transcripts_in_bin,
+                |&tx_id| self.tx_span_start[tx_id] < end0,
+            );
+
+            // Only transcripts with start < end0 can overlap
+            for &tx_id in &transcripts_in_bin[..cutoff] {
+                // True overlap condition
+                if self.tx_span_end[tx_id] > start0 {
+                    candidates.insert(tx_id);
+                }
+            }
         }
-        out.sort_unstable();
-        out.dedup();
-        out
+        // Deduplicate across bins
+        let ret = candidates.into_iter().collect();
+
+        ret
+    }
+
+    #[inline]
+    fn partition_point<T, F>(slice: &[T], mut pred: F) -> usize
+    where
+        F: FnMut(&T) -> bool,
+    {
+        let mut left = 0usize;
+        let mut right = slice.len();
+
+        while left < right {
+            let mid = left + (right - left) / 2;
+
+            if pred(&slice[mid]) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+
+        left
     }
 
     /// Convenience: candidates for a spliced read (based on its span).
@@ -896,6 +945,7 @@ chr1\tsrc\texon\t201\t240\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T2\";
         assert!(!best.is_empty());
         assert_eq!(best[0].hit.class, MatchClass::ExactJunctionChain);
         assert_eq!(best.len(), 1);
+        //panic!("Best vec: {:?}",best.iter().map(|b| b.hit.class ));
     }
 
     #[test]
