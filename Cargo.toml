@@ -1,7 +1,17 @@
 [package]
 name = "gtf_splice_index"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2024"
+description = "A fast, splice-aware index for GTF/GFF annotations enabling efficient transcript and gene lookup for RNA-seq read mapping and quantification."
+license = "MIT"
+repository = "https://github.com/stela2502/gtf_splice_index"
+homepage = "https://github.com/stela2502/gtf_splice_index"
+documentation = "https://docs.rs/gtf_splice_index"
+readme = "README.md"
+keywords = ["bioinformatics", "rna-seq", "gtf", "splicing", "genomics"]
+categories = ["science", "command-line-utilities"]
+authors = ["Stefan Lang"]
+
 
 [dependencies]
 flate2 = "1.1.9"
