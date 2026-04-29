@@ -1,8 +1,5 @@
-pub mod types;
-pub mod transcript;
 pub mod gene;
+pub mod transcript;
+pub mod types;
 
-pub use types::{
-    MatchClass, MatchHit, MatchOptions, OverhangClass, 
-    GeneId, TranscriptId
-};
+pub use types::{GeneId, MatchClass, MatchHit, MatchOptions, OverhangClass, TranscriptId};

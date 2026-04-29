@@ -1,21 +1,21 @@
 use std::collections::{HashMap, HashSet};
-use std::io::BufRead;
 use std::fmt;
+use std::io::BufRead;
 
 use crate::annotation::io::{AnnotationReader, AnnotationRecord, ParseError};
 use crate::model::gene::Gene;
 use crate::model::transcript::Transcript;
 use crate::model::types::{GeneId, MatchClass, MatchHit, MatchOptions, TranscriptId};
+#[allow(unused_imports)]
 use crate::types::{RefBlock, SplicedRead, Strand};
 
 // to serialize the data
-use serde::{Serialize, Deserialize};
-use anyhow::{bail, Context, Result};
-use std::path::Path;
-use std::fs::File;
-use std::io::{Read, BufReader, Write};
+use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
-
+use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::{BufReader, Read, Write};
+use std::path::Path;
 
 const MAGIC: &[u8; 4] = b"SPX1";
 const VERSION_STR: &str = env!("CARGO_PKG_VERSION");
@@ -172,7 +172,6 @@ pub struct SpliceIndex {
     pub tx_span_end: Vec<u32>,
 }
 
-
 /// Human-readable summary of the `SpliceIndex`.
 ///
 /// The output is intended for quick inspection and debugging. It prints:
@@ -201,8 +200,8 @@ impl fmt::Display for SpliceIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // ---- global summary ----
         let n_genes = self.genes.len();
-        let n_txs   = self.transcripts.len();
-        let n_chrs  = self.chr_names.len();
+        let n_txs = self.transcripts.len();
+        let n_chrs = self.chr_names.len();
 
         writeln!(
             f,
@@ -211,11 +210,7 @@ impl fmt::Display for SpliceIndex {
         )?;
 
         if let Some(g) = self.genes.get(0) {
-            writeln!(
-                f,
-                "Gene Names like: {}",
-                g.names.join(", ")
-            )?;
+            writeln!(f, "Gene Names like: {}", g.names.join(", "))?;
         } else {
             writeln!(f, "Gene Names like: No genes detected")?;
         }
@@ -280,8 +275,6 @@ impl fmt::Display for SpliceIndex {
     }
 }
 
-
-
 impl SpliceIndex {
     pub fn new(bin_width: u32) -> Self {
         Self {
@@ -326,11 +319,7 @@ impl SpliceIndex {
     /// `chr_names` (stable "first-seen" order).
     ///
     /// This avoids requiring an external chromosome ordering for the common case.
-    pub fn from_path<P: AsRef<Path>>(
-        path: P,
-        bin_width: u32,
-        keys: IdNameKeys,
-    ) -> Result<Self> {
+    pub fn from_path<P: AsRef<Path>>(path: P, bin_width: u32, keys: IdNameKeys) -> Result<Self> {
         let path = path.as_ref();
 
         let is_gz = path
@@ -355,8 +344,8 @@ impl SpliceIndex {
         // ----------------------------
         // Pass 1: discover chr order (first-seen in file)
         // ----------------------------
-        let mut reader = open_bufread()
-            .with_context(|| format!("prepare reader for {}", path.display()))?;
+        let mut reader =
+            open_bufread().with_context(|| format!("prepare reader for {}", path.display()))?;
 
         let mut chr_names: Vec<String> = Vec::new();
         let mut chr_to_id: HashMap<String, usize> = HashMap::new();
@@ -417,24 +406,19 @@ impl SpliceIndex {
         // ----------------------------
         // Pass 2: actual parse/build using your existing from_reader
         // ----------------------------
-        let reader = open_bufread()
-            .with_context(|| format!("re-open reader for {}", path.display()))?;
+        let reader =
+            open_bufread().with_context(|| format!("re-open reader for {}", path.display()))?;
 
         idx.from_reader(reader, keys)
             .with_context(|| format!("build splice index from {}", path.display()))
     }
 
-    
     pub fn gene_name(&self, gene_id: GeneId) -> Option<&str> {
-        self.genes
-            .get(gene_id)
-            .and_then(|g| g.primary_name())
+        self.genes.get(gene_id).and_then(|g| g.primary_name())
     }
 
     pub fn transcript_name(&self, tx_id: TranscriptId) -> Option<&str> {
-        self.transcripts
-            .get(tx_id)
-            .and_then(|t| t.primary_name())
+        self.transcripts.get(tx_id).and_then(|t| t.primary_name())
     }
     /// Build an index directly from a GTF/GFF3 reader.
     ///
@@ -480,7 +464,7 @@ impl SpliceIndex {
         for rec in AnnotationReader::new(reader).records() {
             let rec = rec?;
 
-            if !rec.is_exon_feature( &keys.exon_feature_types) {
+            if !rec.is_exon_feature(&keys.exon_feature_types) {
                 continue;
             }
 
@@ -519,14 +503,8 @@ impl SpliceIndex {
 
             // For each transcript key, intern transcript and add exon
             for tx_key in tx_keys {
-                let tx_id = self.intern_tx(
-                    &rec,
-                    &keys,
-                    chr_id,
-                    gene_id,
-                    &tx_key,
-                    &mut tx_key_to_id,
-                );
+                let tx_id =
+                    self.intern_tx(&rec, &keys, chr_id, gene_id, &tx_key, &mut tx_key_to_id);
 
                 tx_to_gene.entry(tx_id).or_insert(gene_id);
 
@@ -706,7 +684,8 @@ impl SpliceIndex {
         }
 
         // Per gene: best class + best hit + winning tx ids
-        let mut per_gene: HashMap<GeneId, (MatchClass, MatchHit, Vec<TranscriptId>)> = HashMap::new();
+        let mut per_gene: HashMap<GeneId, (MatchClass, MatchHit, Vec<TranscriptId>)> =
+            HashMap::new();
 
         for tx_id in candidates {
             let tx = &self.transcripts[tx_id];
@@ -771,7 +750,12 @@ impl SpliceIndex {
         }
 
         // Deterministic order across genes: smaller overhang sum first, then gene_id.
-        out.sort_by_key(|g| (g.best_hit.overhang_5p_bp + g.best_hit.overhang_3p_bp, g.gene_id));
+        out.sort_by_key(|g| {
+            (
+                g.best_hit.overhang_5p_bp + g.best_hit.overhang_3p_bp,
+                g.gene_id,
+            )
+        });
         out
     }
 
@@ -809,7 +793,9 @@ impl SpliceIndex {
         }
 
         // Choose primary display name: first gene_name_keys present, else gene_key
-        let primary = rec.pick_first_attr(&keys.gene_name_keys).unwrap_or_else(|| gene_key.to_string());
+        let primary = rec
+            .pick_first_attr(&keys.gene_name_keys)
+            .unwrap_or_else(|| gene_key.to_string());
 
         let gid = self.genes.len();
         self.genes.push(Gene::new(gid, primary));
@@ -845,16 +831,13 @@ impl SpliceIndex {
             return tid;
         }
 
-        let primary = rec.pick_first_attr( &keys.transcript_name_keys).unwrap_or_else(|| tx_key.to_string());
+        let primary = rec
+            .pick_first_attr(&keys.transcript_name_keys)
+            .unwrap_or_else(|| tx_key.to_string());
 
         let tid = self.transcripts.len();
-        self.transcripts.push(Transcript::new(
-            tid,
-            gene_id,
-            primary,
-            chr_id,
-            rec.strand,
-        ));
+        self.transcripts
+            .push(Transcript::new(tid, gene_id, primary, chr_id, rec.strand));
         tx_key_to_id.insert(tx_key.to_string(), tid);
 
         self.transcripts[tid].add_name(tx_key);
@@ -869,12 +852,14 @@ impl SpliceIndex {
 
     fn build_buckets(&mut self) {
         for (tx_id, tx) in self.transcripts.iter().enumerate() {
-            let Some((s, e)) = tx.span() else { continue; };
+            let Some((s, e)) = tx.span() else {
+                continue;
+            };
             self.chr_buckets[tx.chr_id].add_span(tx_id, s, e);
         }
         self.finalize();
     }
-        /// Serialize this index with a small header (magic + crate version) and a bincode payload.
+    /// Serialize this index with a small header (magic + crate version) and a bincode payload.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         let mut f = File::create(path)?;
@@ -931,8 +916,37 @@ impl SpliceIndex {
 
         Ok(idx)
     }
-}
 
+    pub fn build_chr_map_fuzzy(&self) -> std::collections::HashMap<String, usize> {
+        let mut map = std::collections::HashMap::new();
+
+        for (i, n) in self.chr_names.iter().enumerate() {
+            map.entry(n.clone()).or_insert(i);
+
+            let no_chr = n.strip_prefix("chr").unwrap_or(n).to_string();
+            map.entry(no_chr).or_insert(i);
+
+            let with_chr = if n.starts_with("chr") {
+                n.clone()
+            } else {
+                format!("chr{n}")
+            };
+            map.entry(with_chr).or_insert(i);
+
+            if n == "MT" {
+                map.entry("chrM".to_string()).or_insert(i);
+                map.entry("M".to_string()).or_insert(i);
+            }
+
+            if n == "chrM" {
+                map.entry("MT".to_string()).or_insert(i);
+                map.entry("M".to_string()).or_insert(i);
+            }
+        }
+
+        map
+    }
+}
 
 /// Split Parent= list (GFF3) by commas; also trim whitespace.
 fn split_gff3_parent_list(raw: &str) -> Vec<String> {
@@ -1049,15 +1063,13 @@ chr2\tsrc\texon\t5\t20\t.\t-\t.\tParent=tx1,tx2;gene_id=G9;Name=GeneNice
 }
 */
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use std::collections::{HashMap, HashSet};
-    use std::fs;
-    use std::path::PathBuf;
     use crate::model::types::{GeneId, TranscriptId};
+    use std::collections::{HashMap, HashSet};
+    use std::path::PathBuf;
 
     // If you already have a crate-local Result/Error type, keep using it.
     // Otherwise you can switch these tests to `anyhow::Result<()>` easily.
@@ -1092,7 +1104,12 @@ mod tests {
     // -----------------------------
     // Helpers: create transcripts/genes (using your constructors)
     // -----------------------------
-    fn make_gene(id: GeneId, primary: &str, aliases: &[&str], transcript_ids: &[TranscriptId]) -> Gene {
+    fn make_gene(
+        id: GeneId,
+        primary: &str,
+        aliases: &[&str],
+        transcript_ids: &[TranscriptId],
+    ) -> Gene {
         let mut g = Gene::new(id, primary);
         for &a in aliases {
             g.add_name(a);
@@ -1216,10 +1233,7 @@ mod tests {
 
         // Because this is a unit test in the same module, we can fill private fields.
         idx.chr_names = vec!["chr1".to_string(), "chr2".to_string()];
-        idx.chr_to_id = HashMap::from([
-            ("chr1".to_string(), 0usize),
-            ("chr2".to_string(), 1usize),
-        ]);
+        idx.chr_to_id = HashMap::from([("chr1".to_string(), 0usize), ("chr2".to_string(), 1usize)]);
 
         // transcripts
         let tx0 = make_transcript(
@@ -1231,7 +1245,10 @@ mod tests {
             Strand::Plus,
             vec![
                 RefBlock { start: 10, end: 60 },
-                RefBlock { start: 140, end: 180 },
+                RefBlock {
+                    start: 140,
+                    end: 180,
+                },
             ],
         );
 
@@ -1242,7 +1259,10 @@ mod tests {
             &["TX1"],
             0,
             Strand::Plus,
-            vec![RefBlock { start: 200, end: 260 }],
+            vec![RefBlock {
+                start: 200,
+                end: 260,
+            }],
         );
 
         let tx2 = make_transcript(
@@ -1252,28 +1272,37 @@ mod tests {
             &["TX2"],
             1,
             Strand::Minus,
-            vec![RefBlock { start: 90, end: 110 }],
+            vec![RefBlock {
+                start: 90,
+                end: 110,
+            }],
         );
 
         // add this tx3
         let tx3 = make_transcript(
             tid(3),
-            0,                 // same gene as tx0/tx1, or set 1 if you want a second gene on chr1
+            0, // same gene as tx0/tx1, or set 1 if you want a second gene on chr1
             "TX3",
             &["TX3"],
-            0,                 // chr1
+            0, // chr1
             Strand::Plus,
             vec![
-                RefBlock { start: 150, end: 160 },
-                RefBlock { start: 210, end: 240 },
+                RefBlock {
+                    start: 150,
+                    end: 160,
+                },
+                RefBlock {
+                    start: 210,
+                    end: 240,
+                },
             ],
         );
 
         idx.transcripts = vec![tx0, tx1, tx2, tx3];
 
         // genes
-        let g0 = make_gene(gid(0),"G0", &["G0", "GeneZero"], &[tid(0), tid(1)]);
-        let g1 = make_gene(gid(1),"G1", &["G1"], &[tid(2)]);
+        let g0 = make_gene(gid(0), "G0", &["G0", "GeneZero"], &[tid(0), tid(1)]);
+        let g1 = make_gene(gid(1), "G1", &["G1"], &[tid(2)]);
         idx.genes = vec![g0, g1];
 
         // build cached structures
@@ -1328,7 +1357,7 @@ mod tests {
         // bin1: tx0 (140..180)
         assert_eq!(cb1.bins[1], vec![tid(0), tid(3)]);
         // bin2: tx1 (200..260)
-        assert_eq!(cb1.bins[2], vec![tid(3),tid(1)]);
+        assert_eq!(cb1.bins[2], vec![tid(3), tid(1)]);
 
         // chr2 max_end = 110 => nbins=2 (0..1)
         let cb2 = &idx.chr_buckets[1];
@@ -1349,7 +1378,7 @@ mod tests {
         // chr1 span 150..250 touches bins 1 and 2 => tx0, tx1
         let mut c = idx.candidates_for_span_union(0, 150, 250);
         c.sort_by_key(|x| *x);
-        assert_eq!(c, vec![tid(0), tid(1), tid(3) ]);
+        assert_eq!(c, vec![tid(0), tid(1), tid(3)]);
 
         // chr2 span 95..96 touches only bin0 => tx2
         let mut c = idx.candidates_for_span_union(1, 95, 96);
@@ -1363,7 +1392,10 @@ mod tests {
             Strand::Plus,
             vec![
                 RefBlock { start: 12, end: 20 },
-                RefBlock { start: 160, end: 170 },
+                RefBlock {
+                    start: 160,
+                    end: 170,
+                },
             ],
         );
         read_chr1.finalize();
@@ -1375,8 +1407,14 @@ mod tests {
             0,
             Strand::Plus,
             vec![
-                RefBlock { start: 155, end: 165 },
-                RefBlock { start: 205, end: 210 },
+                RefBlock {
+                    start: 155,
+                    end: 165,
+                },
+                RefBlock {
+                    start: 205,
+                    end: 210,
+                },
             ],
         );
         read_chr1_wide.finalize();
@@ -1436,20 +1474,17 @@ mod tests {
         Ok(())
     }
 
-
-
     // -----------------------------
     // Roundtrip test: save/load
     // -----------------------------
     #[test]
     fn splice_index_save_load_roundtrip_preserves_internal_structure() -> TestResult<()> {
-
         use std::io::Cursor;
 
         // -----------------------------
         // Inline GTF (2 genes, 3 transcripts)
         // -----------------------------
-        let gtf  = concat!(
+        let gtf = concat!(
             "chr1\tsource\texon\t10\t60\t.\t+\t.\tgene_id \"G0\"; transcript_id \"TX0\"; gene_name \"GeneZero\";\n",
             "chr1\tsource\texon\t140\t180\t.\t+\t.\tgene_id \"G0\"; transcript_id \"TX0\";\n",
             "chr1\tsource\texon\t200\t260\t.\t+\t.\tgene_id \"G0\"; transcript_id \"TX1\";\n",
@@ -1461,12 +1496,12 @@ mod tests {
         // -----------------------------
         let mut idx = SpliceIndex::new(50).from_reader(
             Cursor::new(gtf),
-            IdNameKeys::default() // your default keys
+            IdNameKeys::default(), // your default keys
         )?;
 
         // IMPORTANT: finalize after build
-        idx.finalize();  
-        
+        idx.finalize();
+
         let path = tmp_path("splice_index_inline_gtf");
 
         idx.save(&path)?;
@@ -1513,10 +1548,7 @@ mod tests {
         let mut idx = SpliceIndex::new(100);
 
         idx.chr_names = vec!["chr1".to_string(), "chr2".to_string()];
-        idx.chr_to_id = HashMap::from([
-            ("chr1".to_string(), 0usize),
-            ("chr2".to_string(), 1usize),
-        ]);
+        idx.chr_to_id = HashMap::from([("chr1".to_string(), 0usize), ("chr2".to_string(), 1usize)]);
 
         // Gene layout:
         // genes[0] => G0 on chr1 with TX0 + TX1
@@ -1535,10 +1567,7 @@ mod tests {
             &["TxZero"],
             0,
             Strand::Plus,
-            vec![
-                RefBlock::new(10, 60),
-                RefBlock::new(140, 180),
-            ],
+            vec![RefBlock::new(10, 60), RefBlock::new(140, 180)],
         );
 
         // TX1 (gene index 0), chr1, single exon in bin2 (not needed for this test, but realistic)
@@ -1573,10 +1602,7 @@ mod tests {
             &[],
             0,
             Strand::Plus,
-            vec![
-                RefBlock::new(150, 160),
-                RefBlock::new(210, 240),
-            ],
+            vec![RefBlock::new(150, 160), RefBlock::new(210, 240)],
         );
 
         idx.transcripts = vec![tx0, tx1, tx2, tx3];
@@ -1614,10 +1640,7 @@ mod tests {
         let mut read_tx0 = SplicedRead::new(
             0,
             Strand::Plus,
-            vec![
-                RefBlock::new(12, 60),
-                RefBlock::new(140, 170),
-            ],
+            vec![RefBlock::new(12, 60), RefBlock::new(140, 170)],
         );
         read_tx0.finalize(); // REQUIRED for matching
 
@@ -1636,7 +1659,9 @@ mod tests {
 
         // Every returned hit should be ExactJunctionChain under this option set
         assert!(
-            tx_hits.iter().all(|h| h.hit.class == MatchClass::ExactJunctionChain),
+            tx_hits
+                .iter()
+                .all(|h| h.hit.class == MatchClass::ExactJunctionChain),
             "expected only ExactJunctionChain hits, got: {tx_hits:?}"
         );
 
@@ -1660,7 +1685,9 @@ mod tests {
 
         // Under exact requirement, best_hit should also be ExactJunctionChain
         assert!(
-            gene_hits.iter().all(|g| g.best_hit.class == MatchClass::ExactJunctionChain),
+            gene_hits
+                .iter()
+                .all(|g| g.best_hit.class == MatchClass::ExactJunctionChain),
             "expected ExactJunctionChain gene best_hit, got: {gene_hits:?}"
         );
 

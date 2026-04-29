@@ -32,7 +32,6 @@ pub enum MatchClass {
     StrandMismatch,
 }
 
-
 impl fmt::Display for MatchClass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
@@ -149,4 +148,3 @@ impl Default for MatchOptions {
         }
     }
 }
-

@@ -1,5 +1,5 @@
-use crate::model::types::{TranscriptId, GeneId};
-use serde::{Serialize, Deserialize};
+use crate::model::types::{GeneId, TranscriptId};
+use serde::{Deserialize, Serialize};
 
 /// Gene model: stores one or more names/aliases and transcript ids.
 ///
@@ -51,10 +51,7 @@ impl Gene {
         self.transcript_ids.sort_unstable();
         self.transcript_ids.dedup();
     }
-
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -102,12 +99,10 @@ mod tests {
         g.add_transcript(5);
         g.add_transcript(2);
 
-        assert_eq!(g.transcript_ids(), &[5,2]);
+        assert_eq!(g.transcript_ids(), &[5, 2]);
 
         // If you want stable ordering, finalize().
         g.finalize();
         assert_eq!(g.transcript_ids(), &[2, 5]);
-
     }
 }
-

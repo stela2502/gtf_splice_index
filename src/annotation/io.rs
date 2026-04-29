@@ -38,7 +38,10 @@ pub enum Dialect {
 ///   require them (i.e. in the index builder), because that's a policy choice.
 #[derive(Debug)]
 pub enum ParseError {
-    IoPath { path: String, source: std::io::Error },
+    IoPath {
+        path: String,
+        source: std::io::Error,
+    },
 
     /// "We tried to parse X, but failed because Y."
     MalformedLine {
@@ -196,27 +199,29 @@ impl<R: BufRead> AnnotationReader<R> {
 
     /// Returns an iterator over parsed records.
     pub fn records(mut self) -> impl Iterator<Item = Result<AnnotationRecord, ParseError>> {
-        std::iter::from_fn(move || loop {
-            self.buf.clear();
-            self.line_no += 1;
+        std::iter::from_fn(move || {
+            loop {
+                self.buf.clear();
+                self.line_no += 1;
 
-            match self.reader.read_line(&mut self.buf) {
-                Ok(0) => return None,
-                Ok(_) => {}
-                Err(e) => {
-                    return Some(Err(ParseError::IoPath {
-                        path: "<reader>".to_string(),
-                        source: e,
-                    }))
+                match self.reader.read_line(&mut self.buf) {
+                    Ok(0) => return None,
+                    Ok(_) => {}
+                    Err(e) => {
+                        return Some(Err(ParseError::IoPath {
+                            path: "<reader>".to_string(),
+                            source: e,
+                        }));
+                    }
                 }
-            }
 
-            let line = self.buf.trim_end_matches(&['\n', '\r'][..]);
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
+                let line = self.buf.trim_end_matches(&['\n', '\r'][..]);
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
 
-            return Some(parse_record_line_with_lineno(line, self.line_no));
+                return Some(parse_record_line_with_lineno(line, self.line_no));
+            }
         })
     }
 }
@@ -226,7 +231,10 @@ impl<R: BufRead> AnnotationReader<R> {
 // ----------------------------
 
 /// Parse a single non-comment line into an `AnnotationRecord` with a line number.
-pub fn parse_record_line_with_lineno(line: &str, line_no: usize) -> Result<AnnotationRecord, ParseError> {
+pub fn parse_record_line_with_lineno(
+    line: &str,
+    line_no: usize,
+) -> Result<AnnotationRecord, ParseError> {
     let line_preview = preview_line(line, 320);
 
     // GTF/GFF have 9 tab-separated columns:
@@ -270,7 +278,10 @@ pub fn parse_record_line_with_lineno(line: &str, line_no: usize) -> Result<Annot
     if start_1 == 0 || end_1 == 0 || end_1 < start_1 {
         return Err(ParseError::BadCoordinates {
             line_no: Some(line_no),
-            problem: format!("expected 1-based inclusive coordinates with end >= start; got {}..{}", start_1, end_1),
+            problem: format!(
+                "expected 1-based inclusive coordinates with end >= start; got {}..{}",
+                start_1, end_1
+            ),
             line_preview,
         });
     }
@@ -281,13 +292,17 @@ pub fn parse_record_line_with_lineno(line: &str, line_no: usize) -> Result<Annot
     let score = if score_s == "." {
         None
     } else {
-        Some(score_s.parse::<f32>().map_err(|_| ParseError::MalformedLine {
-            line_no: Some(line_no),
-            expected: "score column to be '.' or a float",
-            problem: format!("score '{}' is not a float", score_s),
-            details: Some("score is column 6".to_string()),
-            line_preview: preview_line(line, 320),
-        })?)
+        Some(
+            score_s
+                .parse::<f32>()
+                .map_err(|_| ParseError::MalformedLine {
+                    line_no: Some(line_no),
+                    expected: "score column to be '.' or a float",
+                    problem: format!("score '{}' is not a float", score_s),
+                    details: Some("score is column 6".to_string()),
+                    line_preview: preview_line(line, 320),
+                })?,
+        )
     };
 
     let strand = match strand_s {
@@ -301,7 +316,7 @@ pub fn parse_record_line_with_lineno(line: &str, line_no: usize) -> Result<Annot
                 problem: format!("invalid strand value '{}'", strand_s),
                 details: Some("strand is column 7".to_string()),
                 line_preview,
-            })
+            });
         }
     };
 
@@ -331,7 +346,11 @@ pub fn parse_record_line_with_lineno(line: &str, line_no: usize) -> Result<Annot
     let (dialect, attrs) = parse_attributes(attrs_s).map_err(|mut e| {
         // Attach line number + line preview if needed
         match &mut e {
-            ParseError::MalformedLine { line_no: ln, line_preview: lp, .. } => {
+            ParseError::MalformedLine {
+                line_no: ln,
+                line_preview: lp,
+                ..
+            } => {
                 if ln.is_none() {
                     *ln = Some(line_no);
                 }
@@ -339,7 +358,11 @@ pub fn parse_record_line_with_lineno(line: &str, line_no: usize) -> Result<Annot
                     *lp = preview_line(line, 320);
                 }
             }
-            ParseError::BadCoordinates { line_no: ln, line_preview: lp, .. } => {
+            ParseError::BadCoordinates {
+                line_no: ln,
+                line_preview: lp,
+                ..
+            } => {
                 if ln.is_none() {
                     *ln = Some(line_no);
                 }

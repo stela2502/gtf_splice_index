@@ -1,8 +1,8 @@
-use std::io::{ BufRead, BufReader};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use crate::index::{IdNameKeys, SpliceIndex};
 use crate::annotation::io::ParseError;
+use crate::index::{IdNameKeys, SpliceIndex};
 
 /// High-level builder for creating a `SpliceIndex` from a GTF/GFF3 file.
 ///
@@ -120,7 +120,12 @@ chr1\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Alpha\"; transcr
 
         // We store multiple names/aliases; at minimum expect these to be present.
         assert!(idx.genes[0].names.iter().any(|n| n == "Alpha" || n == "G1"));
-        assert!(idx.transcripts[0].names.iter().any(|n| n == "TxA" || n == "T1"));
+        assert!(
+            idx.transcripts[0]
+                .names
+                .iter()
+                .any(|n| n == "TxA" || n == "T1")
+        );
 
         // Exons should be converted to 0-based half-open: 101..150 => [100,150)
         assert_eq!(idx.transcripts[0].exons()[0].start, 100);
@@ -163,7 +168,12 @@ chr2\tsrc\texon\t30\t40\t.\t-\t.\tParent=tx1;gene_id=G9;Name=GeneNice
         assert_eq!(idx.transcripts[0].exons()[0].end, 20);
 
         // Gene/transcript names should include configured values
-        assert!(idx.genes[0].names.iter().any(|n| n == "GeneNice" || n == "G9"));
+        assert!(
+            idx.genes[0]
+                .names
+                .iter()
+                .any(|n| n == "GeneNice" || n == "G9")
+        );
         assert!(idx.transcripts[0].names.iter().any(|n| n == "tx1"));
     }
 

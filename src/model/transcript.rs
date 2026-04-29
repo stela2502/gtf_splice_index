@@ -1,7 +1,6 @@
 use crate::model::types::{MatchClass, MatchHit, MatchOptions, TranscriptId};
 use crate::types::{RefBlock, SplicedRead, Strand};
-use serde::{Serialize, Deserialize};
-
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transcript {
@@ -56,26 +55,11 @@ impl Transcript {
         &self.exons
     }
 
-    fn introns(&self) -> Vec<RefBlock> {
-        let mut out = Vec::new();
-        if self.exons.len() < 2 {
-            return out;
-        }
-        for w in self.exons.windows(2) {
-            let a = w[0];
-            let b = w[1];
-            // intron is [a.end, b.start)
-            if a.end < b.start {
-                out.push(RefBlock::new(a.end, b.start));
-            }
-        }
-        out
-    }
     /// sorts the transcripts exons and returns (total start: u32, total end: u32)
     pub fn finalize(&mut self) -> (u32, u32) {
         if self.exons.is_empty() {
             self.finalized = true;
-            return (0,0);
+            return (0, 0);
         }
 
         self.exons.sort_by_key(|b| (b.start, b.end));
@@ -106,7 +90,10 @@ impl Transcript {
         if self.exons.is_empty() {
             return None;
         }
-        Some((self.exons.first().unwrap().start, self.exons.last().unwrap().end))
+        Some((
+            self.exons.first().unwrap().start,
+            self.exons.last().unwrap().end,
+        ))
     }
 
     pub fn junctions(&self) -> Vec<(u32, u32)> {
@@ -117,10 +104,27 @@ impl Transcript {
         read.assert_finalized();
         self.match_read_blocks(read.chr_id, read.strand, &read.blocks, opts)
     }
+    /*
     fn overlaps(a0: u32, a1: u32, b0: u32, b1: u32) -> bool {
         a0 < b1 && b0 < a1
     }
 
+    fn introns(&self) -> Vec<RefBlock> {
+        let mut out = Vec::new();
+        if self.exons.len() < 2 {
+            return out;
+        }
+        for w in self.exons.windows(2) {
+            let a = w[0];
+            let b = w[1];
+            // intron is [a.end, b.start)
+            if a.end < b.start {
+                out.push(RefBlock::new(a.end, b.start));
+            }
+        }
+        out
+    }
+    */
 
     fn match_read_blocks(
         &self,
@@ -133,65 +137,122 @@ impl Transcript {
             panic!("Transcript::match_read_blocks called before finalize()");
         }
 
+        // Overhangs are reported for diagnostics and ranking/debugging.
+        // They are initialized to zero and filled once chromosome/span compatibility
+        // has been established.
         let mut over5 = 0u32;
         let mut over3 = 0u32;
 
+        // ------------------------------------------------------------
+        // 1) Basic validity / chromosome checks
+        // ------------------------------------------------------------
         if read_blocks.is_empty() {
-            return MatchHit::new(MatchClass::NoOverlap, 0, 0);
+            return MatchHit::new(MatchClass::NoOverlap, over5, over3);
         }
 
         if self.chr_id != read_chr_id {
-            return MatchHit::new(MatchClass::NoOverlap, 0, 0);
+            return MatchHit::new(MatchClass::NoOverlap, over5, over3);
         }
-        // Read span (blocks must be sorted + non-empty)
+
+        // Read span is the union span from first block start to last block end.
+        // Assumption: read_blocks are sorted by genomic coordinate.
         let r0 = read_blocks[0].start;
         let r1 = read_blocks[read_blocks.len() - 1].end;
 
         let Some((t0, t1)) = self.span() else {
-            return MatchHit::new(MatchClass::NoOverlap, 0, 0);
+            return MatchHit::new(MatchClass::NoOverlap, over5, over3);
         };
 
         let read_span = RefBlock { start: r0, end: r1 };
         let tx_span = RefBlock { start: t0, end: t1 };
 
         if !read_span.overlaps(tx_span) {
-            return MatchHit::new(MatchClass::NoOverlap, 0, 0);
+            return MatchHit::new(MatchClass::NoOverlap, over5, over3);
         }
 
-        if opts.require_strand && !self.strand.is_compatible_with(read_strand) {
-            if let Some((o5, o3)) = self.compute_overhangs_strand_aware(read_blocks) {
-                over5 = o5;
-                over3 = o3;
-            }
-            return MatchHit::new(MatchClass::StrandMismatch, over5, over3);
-        }
-        
+        // From here on the read overlaps the transcript span, so overhangs are
+        // meaningful to report.
         if let Some((o5, o3)) = self.compute_overhangs_strand_aware(read_blocks) {
             over5 = o5;
             over3 = o3;
         }
 
+        // ------------------------------------------------------------
+        // 2) Optional strand check
+        // ------------------------------------------------------------
+        if opts.require_strand && !self.strand.is_compatible_with(read_strand) {
+            return MatchHit::new(MatchClass::StrandMismatch, over5, over3);
+        }
+
+        // ------------------------------------------------------------
+        // 3) Transcript boundary overhang check
+        // ------------------------------------------------------------
         if over5 > opts.max_5p_overhang_bp || over3 > opts.max_3p_overhang_bp {
             return MatchHit::new(MatchClass::OverhangTooLarge, over5, over3);
         }
 
+        // ------------------------------------------------------------
+        // 4) Exon-fit guard
+        // ------------------------------------------------------------
+        // This is the important biological routing guard.
+        //
+        // Before we even look at junction compatibility, every read block must be
+        // compatible with transcript exons:
+        //
+        // - a purely intronic single-block read must fail here
+        // - a read crossing exon/intron sequence incorrectly must fail here
+        // - a valid exon-contained single-block read may pass here
+        // - a valid spliced read with blocks fitting exons may pass here
+        //
+        // Without this guard, an unspliced read with no junctions can be incorrectly
+        // classified as Compatible because an empty iterator satisfies `.all(...)`.
         if !self.blocks_fit_exons_allowing_end_overhang(read_blocks, 10) {
             return MatchHit::new(MatchClass::Intronic, over5, over3);
         }
 
-        let read_junctions = RefBlock::junctions_from_blocks(read_blocks, opts.allowed_intronic_gap_size);
+        // ------------------------------------------------------------
+        // 5) Junction-chain classification
+        // ------------------------------------------------------------
+        let read_junctions =
+            RefBlock::junctions_from_blocks(read_blocks, opts.allowed_intronic_gap_size);
         let tx_junctions = self.junctions();
 
+        // If exact mode is requested, a read must reproduce the complete transcript
+        // junction chain exactly.
+        //
+        // Important bug fix:
+        // Do NOT allow a single-block read with an empty junction list to be
+        // ExactJunctionChain for a single-exon transcript merely because
+        // `read_junctions == tx_junctions == []`.
+        //
+        // A single-block exon-compatible read is Compatible, not ExactJunctionChain.
         if opts.require_exact_junction_chain {
-            let class = if read_junctions == tx_junctions {
+            let class = if !read_junctions.is_empty() && read_junctions == tx_junctions {
                 MatchClass::ExactJunctionChain
+            } else if read_junctions.is_empty() {
+                MatchClass::Compatible
             } else {
                 MatchClass::JunctionMismatch
             };
+
             return MatchHit::new(class, over5, over3);
         }
 
-        let class = if read_junctions.iter().all(|j| tx_junctions.contains(j)) {
+        // Non-exact mode:
+        //
+        // - Empty read_junctions:
+        //   The read has no splice junctions. Since it passed exon-fit above, it is
+        //   exon-compatible, but it does not prove the transcript junction chain.
+        //   Therefore it is Compatible, not ExactJunctionChain.
+        //
+        // - Non-empty read_junctions:
+        //   Every read junction must exist in the transcript junction chain.
+        //   If the full chain is identical, it is ExactJunctionChain.
+        //   If it is a proper subset, it is Compatible.
+        //   Otherwise it is JunctionMismatch.
+        let class = if read_junctions.is_empty() {
+            MatchClass::Compatible
+        } else if read_junctions.iter().all(|j| tx_junctions.contains(j)) {
             if read_junctions == tx_junctions {
                 MatchClass::ExactJunctionChain
             } else {
@@ -287,7 +348,8 @@ impl Transcript {
                         // Gap endpoints must lie within the exon bounds.
                         // (We allow equality at exon end/start since coordinates are half-open.)
                         let prev_end_in_exon = prev_end >= exon.start && prev_end <= exon.end;
-                        let next_start_in_exon = read_block.start >= exon.start && read_block.start <= exon.end;
+                        let next_start_in_exon =
+                            read_block.start >= exon.start && read_block.start <= exon.end;
 
                         if !prev_end_in_exon || !next_start_in_exon {
                             return false;
@@ -366,7 +428,11 @@ mod tests {
 
         let hit = tx.match_spliced_read(
             &read,
-            MatchOptions { max_5p_overhang_bp: 15, max_3p_overhang_bp: 15, ..Default::default() },
+            MatchOptions {
+                max_5p_overhang_bp: 15,
+                max_3p_overhang_bp: 15,
+                ..Default::default()
+            },
         );
 
         assert_eq!(hit.class, MatchClass::ExactJunctionChain);
@@ -390,7 +456,12 @@ mod tests {
 
         let hit = tx.match_spliced_read(
             &read,
-            MatchOptions { max_5p_overhang_bp: 15, max_3p_overhang_bp: 15, allowed_intronic_gap_size:10, ..Default::default() },
+            MatchOptions {
+                max_5p_overhang_bp: 15,
+                max_3p_overhang_bp: 15,
+                allowed_intronic_gap_size: 10,
+                ..Default::default()
+            },
         );
 
         assert_eq!(hit.class, MatchClass::ExactJunctionChain);

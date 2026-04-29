@@ -1,7 +1,7 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Genomic strand/orientation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize )]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Strand {
     Plus,
     Minus,
@@ -18,7 +18,7 @@ impl Strand {
 
 /// A contiguous genomic interval.
 /// Coordinates are 0-based, half-open: [start, end)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize )]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RefBlock {
     pub start: u32,
     pub end: u32,
@@ -45,7 +45,7 @@ impl RefBlock {
     pub fn contains(self, other: RefBlock) -> bool {
         self.start <= other.start && other.end <= self.end
     }
-    
+
     /// Compute splice junctions from an ordered list of blocks.
     ///
     /// Junction i is: (blocks[i].end, blocks[i+1].start),
@@ -81,10 +81,7 @@ impl RefBlock {
 
         out
     }
-
 }
-
-
 
 /// A spliced read/query in genomic coordinates (BAM-independent).
 ///
@@ -116,7 +113,7 @@ impl SplicedRead {
     /// Sort blocks by start and merge overlaps/adjacent.
     ///
     /// This makes matching stable and guards against messy upstream block creation.
-    pub fn finalize(&mut self) -> (u32, u32){
+    pub fn finalize(&mut self) -> (u32, u32) {
         if self.blocks.is_empty() {
             self.finalized = true;
             return (0, 0);
@@ -161,14 +158,16 @@ impl SplicedRead {
         if self.blocks.is_empty() {
             return None;
         }
-        Some((self.blocks.first().unwrap().start, self.blocks.last().unwrap().end))
+        Some((
+            self.blocks.first().unwrap().start,
+            self.blocks.last().unwrap().end,
+        ))
     }
 
     /// Junctions implied by the read blocks.
     pub fn junctions(&self) -> Vec<(u32, u32)> {
         RefBlock::junctions_from_blocks(&self.blocks, 0)
     }
-
 }
 
 #[cfg(test)]
@@ -177,8 +176,15 @@ mod tests {
 
     #[test]
     fn refblock_junctions() {
-        let blocks = vec![RefBlock::new(10, 20), RefBlock::new(30, 40), RefBlock::new(50, 60)];
-        assert_eq!(RefBlock::junctions_from_blocks(&blocks, 0), vec![(20, 30), (40, 50)]);
+        let blocks = vec![
+            RefBlock::new(10, 20),
+            RefBlock::new(30, 40),
+            RefBlock::new(50, 60),
+        ];
+        assert_eq!(
+            RefBlock::junctions_from_blocks(&blocks, 0),
+            vec![(20, 30), (40, 50)]
+        );
     }
 
     #[test]
@@ -195,9 +201,11 @@ mod tests {
         );
 
         sr.finalize();
-        assert_eq!(sr.blocks, vec![RefBlock::new(100, 130), RefBlock::new(200, 220)]);
+        assert_eq!(
+            sr.blocks,
+            vec![RefBlock::new(100, 130), RefBlock::new(200, 220)]
+        );
         assert_eq!(sr.junctions(), vec![(130, 200)]);
         assert_eq!(sr.span(), Some((100, 220)));
     }
 }
-

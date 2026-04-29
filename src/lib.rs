@@ -4,19 +4,19 @@
 //! This crate models transcripts/genes and matches spliced reads represented
 //! as genomic blocks (0-based, half-open).
 
-pub mod types;
-pub mod model;
 pub mod annotation;
 pub mod index;
+pub mod model;
+pub mod types;
 
 pub use index::{IdNameKeys, SpliceIndex};
 
 pub use annotation::AnnotationBuilder;
 
-pub use types::{RefBlock, SplicedRead, Strand, };
+pub use types::{RefBlock, SplicedRead, Strand};
 
-pub use model::transcript::{Transcript};
-pub use model::gene::{Gene};
+pub use model::gene::Gene;
+pub use model::transcript::Transcript;
 pub use model::types::{GeneId, TranscriptId};
 
 // Re-export shared model matching types at crate root.
