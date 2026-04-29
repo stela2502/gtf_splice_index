@@ -209,7 +209,7 @@ impl Transcript {
         if !self.blocks_fit_exons_allowing_end_overhang(read_blocks, 10) {
             return MatchHit::new(MatchClass::Intronic, over5, over3);
         }
-
+        
         // ------------------------------------------------------------
         // 5) Junction-chain classification
         // ------------------------------------------------------------
@@ -590,5 +590,43 @@ mod tests {
         let hit = tx.match_spliced_read(&read, o);
 
         assert_eq!(hit.class, MatchClass::JunctionMismatch);
+    }
+
+    #[test]
+    fn single_block_exonic_and_intronic_reads_are_not_both_compatible() {
+        let mut tx = Transcript {
+            id: 0,
+            gene_id: 0,
+            names: vec!["tx1".to_string()],
+            chr_id: 0,
+            strand: Strand::Plus,
+            exons: vec![
+                RefBlock { start: 100, end: 150 },
+                RefBlock { start: 250, end: 300 },
+            ],
+            finalized: false,
+        };
+
+        tx.finalize();
+
+        let opts = MatchOptions::default();
+
+        let exon_internal = vec![RefBlock { start: 110, end: 130 }];
+        let intron_internal = vec![RefBlock { start: 180, end: 220 }];
+
+        let exon_hit = tx.match_read_blocks(0, Strand::Plus, &exon_internal, opts);
+        let intron_hit = tx.match_read_blocks(0, Strand::Plus, &intron_internal, opts);
+
+        assert_eq!(
+            exon_hit.class,
+            MatchClass::Compatible,
+            "single-block read fully inside exon should be exon-compatible"
+        );
+
+        assert_eq!(
+            intron_hit.class,
+            MatchClass::Intronic,
+            "single-block read fully inside intron must not become Compatible"
+        );
     }
 }
