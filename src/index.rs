@@ -164,6 +164,7 @@ pub struct SpliceIndex {
 
     pub genes: Vec<Gene>,
     pub transcripts: Vec<Transcript>,
+    transcript_by_name: HashMap<String, usize>,
 
     pub chr_buckets: Vec<ChrBuckets>,
 
@@ -283,6 +284,7 @@ impl SpliceIndex {
             chr_to_id: HashMap::new(),
             genes: Vec::new(),
             transcripts: Vec::new(),
+            transcript_by_name: HashMap::new(),
             chr_buckets: Vec::new(),
             tx_span_start: Vec::new(),
             tx_span_end: Vec::new(),
@@ -388,6 +390,7 @@ impl SpliceIndex {
 
             genes: Vec::new(),
             transcripts: Vec::new(),
+            transcript_by_name: HashMap::new(),
 
             chr_buckets: Vec::new(),
 
@@ -416,6 +419,19 @@ impl SpliceIndex {
     pub fn gene_name(&self, gene_id: GeneId) -> Option<&str> {
         self.genes.get(gene_id).and_then(|g| g.primary_name())
     }
+
+    pub fn transcript_by_name(&self, transcript_name: &str) -> Result<&Transcript, String> {
+        let tx_id = self
+            .transcript_by_name
+            .get(transcript_name)
+            .ok_or_else(|| format!("unknown transcript name {transcript_name:?}"))?;
+
+        self.transcripts
+            .get(*tx_id)
+            .ok_or_else(|| format!("transcript id {tx_id} for {transcript_name:?} is out of bounds"))
+    }
+
+
 
     pub fn transcript_name(&self, tx_id: TranscriptId) -> Option<&str> {
         self.transcripts.get(tx_id).and_then(|t| t.primary_name())
@@ -454,6 +470,7 @@ impl SpliceIndex {
         reader: R,
         keys: IdNameKeys,
     ) -> Result<Self, ParseError> {
+        let mut transcript_by_name = HashMap::new();
         // stable key string -> internal id
         let mut gene_key_to_id: HashMap<String, GeneId> = HashMap::new();
         let mut tx_key_to_id: HashMap<String, TranscriptId> = HashMap::new();
@@ -524,6 +541,11 @@ impl SpliceIndex {
             let (start, end) = tx.finalize();
             self.tx_span_start.push(start);
             self.tx_span_end.push(end);
+            transcript_by_name.insert( 
+                tx.primary_name()
+                .expect("Lib problems - transcript has no primary name!")
+                .to_string(), tx.id 
+            );
         }
 
         // Link transcripts into genes
@@ -536,8 +558,13 @@ impl SpliceIndex {
 
         // Build buckets
         self.build_buckets();
-
+        self.transcript_by_name = transcript_by_name;
         Ok(self)
+    }
+
+    /// get the id for a chr name
+    pub fn chr_id(&self, chr: &str) -> Option<usize> {
+        self.chr_to_id.get(chr).copied()
     }
 
     /// Candidate transcripts for a span using bucket prefilter (union across bins).

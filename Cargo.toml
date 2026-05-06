@@ -1,6 +1,6 @@
 [package]
 name = "gtf_splice_index"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 description = "A fast, splice-aware index for GTF/GFF annotations enabling efficient transcript and gene lookup for RNA-seq read mapping and quantification."
 license = "MIT"

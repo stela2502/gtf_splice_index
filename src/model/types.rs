@@ -32,6 +32,7 @@ pub enum MatchClass {
     StrandMismatch,
 }
 
+
 impl fmt::Display for MatchClass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
@@ -48,8 +49,46 @@ impl fmt::Display for MatchClass {
 }
 
 impl MatchClass {
-    /// Numeric ranking used for comparisons.
+    /// Numeric ranking used for choosing the best hit.
+    ///
     /// Higher is better.
+    ///
+    /// Important:
+    /// This ranking describes *model compatibility*, not output class.
+    /// Do not use `rank()` alone to decide whether a read belongs into the
+    /// exonic or intronic matrix.
+    ///
+    /// Current meaning of the classes:
+    ///
+    /// - `ExactJunctionChain`
+    ///   Read splice junction chain matches the transcript model exactly.
+    ///   This is the strongest evidence for an exonic/spliced transcript hit.
+    ///
+    /// - `Compatible`
+    ///   Read is compatible with the model, but does not provide an exact
+    ///   junction-chain match. This can include exon-contained reads, but may
+    ///   also include reads that are compatible with a gene/transcript region
+    ///   without proving a spliced exonic molecule. Treat carefully when routing
+    ///   reads into exonic vs intronic output.
+    ///
+    /// - `JunctionMismatch`
+    ///   Read overlaps the model but has a splice junction structure that does
+    ///   not match the expected transcript junction chain.
+    ///
+    /// - `Intronic`
+    ///   Read is compatible with an intronic part of the gene/transcript model.
+    ///   This should normally be routed to intronic/unspliced output, not exonic
+    ///   output.
+    ///
+    /// - `OverhangTooLarge`
+    ///   Read overlaps a model but extends too far beyond allowed transcript
+    ///   boundaries.
+    ///
+    /// - `StrandMismatch`
+    ///   Read overlaps but is on an incompatible strand.
+    ///
+    /// - `NoOverlap`
+    ///   No meaningful overlap with the feature model.
     pub fn rank(self) -> u8 {
         match self {
             MatchClass::ExactJunctionChain => 6,
@@ -62,6 +101,7 @@ impl MatchClass {
         }
     }
 }
+
 
 impl Ord for MatchClass {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -148,3 +188,4 @@ impl Default for MatchOptions {
         }
     }
 }
+
