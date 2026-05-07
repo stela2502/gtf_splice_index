@@ -378,6 +378,8 @@ impl SpliceIndex {
                 chr_to_id.insert(chr.to_string(), id);
             }
         }
+        // rebuild it fuzzy!
+        let chr_to_id = Self::build_chr_map(&chr_names);
 
         // ----------------------------
         // Init index with discovered order
@@ -414,6 +416,44 @@ impl SpliceIndex {
 
         idx.from_reader(reader, keys)
             .with_context(|| format!("build splice index from {}", path.display()))
+    }
+
+    /// Build a fuzzy chromosome name map.
+    ///
+    /// Examples:
+    /// - `chr1` maps also from `1`
+    /// - `1` maps also from `chr1`
+    /// - `MT`, `M`, `chrM` are treated as aliases
+    pub fn build_chr_map(chr_names: &[String]) -> HashMap<String, usize> {
+        let mut map = HashMap::with_capacity(chr_names.len() * 4);
+
+        for (chr_id, name) in chr_names.iter().enumerate() {
+            map.entry(name.clone()).or_insert(chr_id);
+
+            if let Some(no_chr) = name.strip_prefix("chr") {
+                map.entry(no_chr.to_string()).or_insert(chr_id);
+            } else {
+                map.entry(format!("chr{name}")).or_insert(chr_id);
+            }
+
+            match name.as_str() {
+                "MT" => {
+                    map.entry("chrM".to_string()).or_insert(chr_id);
+                    map.entry("M".to_string()).or_insert(chr_id);
+                }
+                "chrM" => {
+                    map.entry("MT".to_string()).or_insert(chr_id);
+                    map.entry("M".to_string()).or_insert(chr_id);
+                }
+                "M" => {
+                    map.entry("MT".to_string()).or_insert(chr_id);
+                    map.entry("chrM".to_string()).or_insert(chr_id);
+                }
+                _ => {}
+            }
+        }
+
+        map
     }
 
     pub fn gene_name(&self, gene_id: GeneId) -> Option<&str> {
