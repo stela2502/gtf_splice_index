@@ -306,6 +306,10 @@ impl SpliceIndex {
             .collect()
     }
 
+    pub chr_map(&self) -> &HashMap<String, usize> {
+        &self.chr_to_id
+    }
+
     /// get all transcript names from the index (id == transcript_id)
     pub fn transcript_names(&self) -> Vec<String> {
         self.transcripts
