@@ -306,7 +306,7 @@ impl SpliceIndex {
             .collect()
     }
 
-    pub chr_map(&self) -> &HashMap<String, usize> {
+    pub fn chr_map(&self) -> &HashMap<String, usize> {
         &self.chr_to_id
     }
 
