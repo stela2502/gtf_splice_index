@@ -603,6 +603,9 @@ impl SpliceIndex {
         // Build buckets
         self.build_buckets();
         self.transcript_by_name = transcript_by_name;
+
+        self.chr_to_id = Self::build_chr_map(&self.chr_names);
+        
         Ok(self)
     }
 
@@ -1790,5 +1793,26 @@ mod tests {
         }
 
         Ok(())
+    }
+    #[test]
+    fn chr14_index_resolves_plain_14_alias() {
+        use std::io::Cursor;
+
+        let gtf = "\
+    chr14\tsrc\texon\t101\t150\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T1\";\n\
+    chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T1\";\n";
+
+        let idx = SpliceIndex::new(100)
+            .from_reader(Cursor::new(gtf.as_bytes()), IdNameKeys::default())
+            .unwrap();
+
+        assert_eq!(idx.chr_names, vec!["chr14".to_string()]);
+
+        let chr14_id = idx.chr_id("chr14");
+        let plain14_id = idx.chr_id("14");
+
+        assert_eq!(chr14_id, Some(0));
+        assert_eq!(plain14_id, Some(0));
+        assert_eq!(chr14_id, plain14_id);
     }
 }
