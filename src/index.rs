@@ -328,6 +328,16 @@ impl SpliceIndex {
     pub fn from_path<P: AsRef<Path>>(path: P, bin_width: u32, keys: IdNameKeys) -> Result<Self> {
         let path = path.as_ref();
 
+        if path
+            .extension()
+            .and_then(|s| s.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("dat"))
+        {
+            return Self::load(path)
+                .with_context(|| format!("load splice index {}", path.display()));
+        }
+
+
         let is_gz = path
             .extension()
             .and_then(|s| s.to_str())
